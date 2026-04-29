@@ -11,10 +11,6 @@ Provides REST endpoints for:
 - **Answer Evaluation** — Viva/long-answer scoring with feedback (mistral:7b)
 - **MCQ Evaluation** — Option matching via cosine similarity (SentenceTransformer, local)
 
-> **What changed from the Gemini version?**  
-> Only the LLM backend was swapped: `GeminiModelLoader` → `OllamaModelLoader`.  
-> STT, TTS, and MCQ evaluation are **identical** to the Gemini version.  
-> No API key is required. Everything runs on your machine.
 
 ---
 
