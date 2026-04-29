@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ExamEcho AI Service + Ollama — Docker Compose
+#
+# Usage:
+#   1. docker compose up -d
+#   2. docker compose exec ollama ollama pull mistral:7b
+#   3. Visit http://localhost:8000/docs
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: examecho-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # Optional: enable GPU support (requires nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
+
+  examecho-ai:
+    build: .
+    container_name: examecho-ai
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_MODEL_NAME: "mistral:7b"
+      OLLAMA_TEMPERATURE: "0.0"
+      OLLAMA_MAX_TOKENS: "2048"
+      WHISPER_MODEL_SIZE: "base"
+      TTS_AUDIO_DIR: "/app/generated_audio"
+      CORS_ORIGINS: '["*"]'
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    volumes:
+      - ./generated_audio:/app/generated_audio
+
+volumes:
+  ollama_data:
