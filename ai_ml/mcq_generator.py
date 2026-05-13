@@ -1,12 +1,8 @@
 """
-Question generation engine for ExamEcho.
+MCQ generation engine for ExamEcho.
 
-Generates theory-based exam questions for a given topic and difficulty
+Generates Multiple Choice Questions for a given topic and difficulty
 using a local Ollama model (mistral:7b).
-Questions are verbally answerable (no code/algorithms).
-
-The prompt is carefully structured so that mistral:7b reliably produces
-valid JSON even without function-calling support.
 """
 
 from __future__ import annotations
@@ -14,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import List
+from typing import List, Dict, Any
 
 from langchain_core.prompts import PromptTemplate
 
@@ -24,22 +20,21 @@ from ai_ml.model_creator import OllamaModelLoader
 logger = logging.getLogger(__name__)
 
 
-# Mistral-optimised prompt: explicit JSON-only instruction placed at top and
-# bottom to overcome the model's tendency to add prose preambles.
-_QUESTION_TEMPLATE = """\
+# Mistral-optimised prompt for MCQs
+_MCQ_TEMPLATE = """\
 [INST]
 You are an academic exam question setter. You MUST respond with ONLY a valid JSON object.
 No explanation, no markdown, no preamble.
 
 Task:
-Generate EXACTLY {num_questions} theory-based exam questions for the given TOPIC.
+Generate EXACTLY {num_questions} Multiple Choice Questions (MCQs) for the given TOPIC.
 
 General Rules:
-- Questions must be verbally answerable.
-- NO code, NO programs, NO algorithms.
-- Language must be clear and exam-appropriate.
+- Questions must be clear, concise, and exam-appropriate.
+- Each question MUST have exactly 4 options (A, B, C, D).
+- One and only one option can be the correct answer.
 - Stay strictly within the TOPIC.
-- Each question must be a complete sentence ending with a question mark.
+- NO code, NO programs, NO algorithms unless requested by the topic.
 
 Difficulty Guidelines:
   EASY   → definitions, meanings, purposes
@@ -48,12 +43,19 @@ Difficulty Guidelines:
 
 Output Rules (MANDATORY):
 - Return ONLY valid JSON — no markdown, no comments, no extra text before or after.
-- "questions" MUST be a JSON array of exactly {num_questions} strings.
+- "mcqs" MUST be a JSON array of exactly {num_questions} objects.
+- Each object must have "question", "options" (a list of 4 strings prefixed with A:, B:, C:, D:), and "correct_option" (the exact string of the correct option).
 
 Required JSON format (copy this structure exactly):
 {{
   "topic": "{topic}",
-  "questions": ["<question 1>", "<question 2>"]
+  "mcqs": [
+    {{
+      "question": "<question text>",
+      "options": ["A: <option A>", "B: <option B>", "C: <option C>", "D: <option D>"],
+      "correct_option": "<The correct option string, e.g., 'A: <option A>'>"
+    }}
+  ]
 }}
 
 TOPIC: {topic}
@@ -61,9 +63,9 @@ DIFFICULTY: {difficulty}
 [/INST]"""
 
 
-class QuestionGenerator:
+class MCQGenerator:
     """
-    Generates theory exam questions using a local Ollama model.
+    Generates MCQ exam questions using a local Ollama model.
 
     Args:
         model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
@@ -80,13 +82,13 @@ class QuestionGenerator:
     def _build_chain(self):
         try:
             prompt = PromptTemplate(
-                template=_QUESTION_TEMPLATE,
+                template=_MCQ_TEMPLATE,
                 input_variables=["num_questions", "topic", "difficulty"],
             )
             return prompt | self._get_model()
         except Exception as exc:
             raise ChainCreationError(
-                f"Could not build question generation chain: {exc}"
+                f"Could not build MCQ generation chain: {exc}"
             ) from exc
 
     @staticmethod
@@ -94,19 +96,8 @@ class QuestionGenerator:
         """
         Strip markdown fences, [INST]/[/INST] tags, and extract the first
         valid JSON object from raw model output.
-
-        Args:
-            text: Raw string from the LLM.
-
-        Returns:
-            JSON string ready for ``json.loads``.
-
-        Raises:
-            ValueError: If no valid JSON object is found after cleaning.
         """
-        # Remove Mistral instruction tokens that may leak into output
         text = re.sub(r"\[/?INST\]", "", text)
-        # Remove markdown code fences
         text = re.sub(r"```(?:json)?", "", text)
         text = text.replace("```", "").strip()
 
@@ -121,28 +112,51 @@ class QuestionGenerator:
         raise ValueError("No valid JSON object found in model output.")
 
     @staticmethod
-    def _normalize_questions(raw_questions: list, num_questions: int) -> List[str]:
-        """Strip optional numbering prefixes and filter empty strings."""
+    def _normalize_mcqs(raw_mcqs: list, num_questions: int) -> List[Dict[str, Any]]:
+        """Validate and normalize the generated MCQs."""
         normalized = []
-        for q in raw_questions:
-            if isinstance(q, str):
-                # Remove leading "1. ", "1) ", etc.
-                q = re.sub(r"^\s*\d+[.)]\s*", "", q).strip()
-                if q:
-                    normalized.append(q)
+        for mcq in raw_mcqs:
+            if not isinstance(mcq, dict):
+                continue
+            
+            question = mcq.get("question", "").strip()
+            options = mcq.get("options", [])
+            correct_option = mcq.get("correct_option", "").strip()
+
+            if not question or not isinstance(options, list) or len(options) != 4 or not correct_option:
+                continue
+                
+            # Basic validation to ensure correct option is in the options list
+            if correct_option not in options:
+                # Attempt to find it if it was stripped
+                found = False
+                for opt in options:
+                    if correct_option in opt or opt in correct_option:
+                        correct_option = opt
+                        found = True
+                        break
+                if not found:
+                    continue
+
+            normalized.append({
+                "question": question,
+                "options": [str(opt).strip() for opt in options],
+                "correct_option": correct_option
+            })
+
         return normalized[:num_questions]
 
-    def generate(self, *, topic: str, num_questions: int, difficulty: str) -> List[str]:
+    def generate(self, *, topic: str, num_questions: int, difficulty: str) -> List[Dict[str, Any]]:
         """
-        Generate exam questions for a topic.
+        Generate MCQ questions for a topic.
 
         Args:
-            topic:         Subject topic (e.g. "Binary Trees").
-            num_questions: Number of questions to generate (1–100).
-            difficulty:    One of ``"easy"``, ``"medium"``, ``"hard"``.
+            topic:         Subject topic.
+            num_questions: Number of questions to generate.
+            difficulty:    One of "easy", "medium", "hard".
 
         Returns:
-            List of question strings (length == ``num_questions``).
+            List of dictionaries representing the MCQs.
 
         Raises:
             ChainCreationError:      If the LangChain chain cannot be built.
@@ -150,7 +164,7 @@ class QuestionGenerator:
                                       questions than requested.
         """
         logger.debug(
-            "Generating %d '%s' questions for topic: %s",
+            "Generating %d '%s' MCQs for topic: %s",
             num_questions,
             difficulty,
             topic,
@@ -174,31 +188,31 @@ class QuestionGenerator:
             cleaned = self._sanitize_json(content)
             data = json.loads(cleaned)
         except (ValueError, json.JSONDecodeError) as exc:
-            logger.error("Failed to parse questions JSON. Raw output (first 500 chars): %s", content[:500])
+            logger.error("Failed to parse MCQs JSON. Raw output (first 500 chars): %s", content[:500])
             raise QuestionsGenerationError(
                 f"Invalid JSON from model. Original error: {exc}"
             ) from exc
 
-        raw_list = data.get("questions", [])
+        raw_list = data.get("mcqs", [])
         if not isinstance(raw_list, list):
-            raise QuestionsGenerationError("'questions' field is not a list in model response.")
+            raise QuestionsGenerationError("'mcqs' field is not a list in model response.")
 
-        questions = self._normalize_questions(raw_list, num_questions)
+        mcqs = self._normalize_mcqs(raw_list, num_questions)
 
-        if not questions:
-            raise QuestionsGenerationError("Model returned an empty questions list.")
+        if not mcqs:
+            raise QuestionsGenerationError("Model returned an empty or invalid MCQs list.")
 
-        if len(questions) < num_questions:
+        if len(mcqs) < num_questions:
             logger.warning(
-                "Expected %d questions but received %d for topic '%s'.",
+                "Expected %d MCQs but received %d for topic '%s'.",
                 num_questions,
-                len(questions),
+                len(mcqs),
                 topic,
             )
             raise QuestionsGenerationError(
-                f"Expected {num_questions} questions but received only {len(questions)}. "
+                f"Expected {num_questions} MCQs but received only {len(mcqs)}. "
                 "Try reducing num_questions or simplifying the topic."
             )
 
-        logger.debug("Generated %d questions for '%s'.", len(questions), topic)
-        return questions
+        logger.debug("Generated %d MCQs for '%s'.", len(mcqs), topic)
+        return mcqs

@@ -142,6 +142,7 @@ from app.routers import (  # noqa: E402
     evaluation,
     mcq_evaluation,
     question_generator,
+    mcq_generator,
     rubrics,
     stt,
     tts,
@@ -154,6 +155,7 @@ for router in [
     rubrics.router,
     mcq_evaluation.router,
     question_generator.router,
+    mcq_generator.router,
 ]:
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 
