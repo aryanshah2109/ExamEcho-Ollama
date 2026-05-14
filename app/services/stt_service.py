@@ -14,6 +14,7 @@ import tempfile
 from fastapi import UploadFile
 
 from ai_ml.stt import STT
+from ai_ml.audio_preprocessor import AudioPreprocessor, AudioPreprocessorConfig
 from app.config import settings
 from app.core.state import app_state
 
@@ -29,29 +30,11 @@ ALLOWED_CONTENT_TYPES = {
     "audio/ogg",
 }
 
+config = AudioPreprocessorConfig(vad_enabled=settings.STT_VAD_ENABLED)
+preprocessor = AudioPreprocessor(config=config)
 
-async def transcribe_audio(
-    audio: UploadFile,
-    lang: str = "en",
-    model: str | None = None,
-) -> str:
-    """
-    Save the uploaded audio to a temp file, transcribe it, then clean up.
-
-    Args:
-        audio:  FastAPI ``UploadFile`` object.
-        lang:   BCP-47 language code for transcription.
-        model:  STT backend override (``"whisper"`` or ``"hf"``).
-                Defaults to ``settings.STT_DEFAULT_MODEL``.
-
-    Returns:
-        Transcribed text string (may be empty if audio contains no speech).
-
-    Raises:
-        AudioProcessingError: Propagated from the STT module.
-    """
+async def transcribe_audio(audio: UploadFile, lang: str = "en", model: str | None = None) -> str:
     chosen_model = model or settings.STT_DEFAULT_MODEL
-
     suffix = _extension_from_content_type(audio.content_type)
     tmp_path: str | None = None
 
@@ -61,33 +44,22 @@ async def transcribe_audio(
             content = await audio.read()
             tmp.write(content)
 
-        logger.debug(
-            "Saved upload to temp file %s (%d bytes), model=%s, lang=%s",
-            tmp_path,
-            len(content),
-            chosen_model,
-            lang,
-        )
+        # Use module-level preprocessor (VAD disabled per config)
+        result = preprocessor.preprocess_file(tmp_path)
+        processed_path = result.metadata.processed_path
 
-        # Use preloaded Whisper model from startup if available
         if chosen_model == "whisper" and app_state.whisper_model is not None:
-            text = STT.transcribe_with_model(
-                model=app_state.whisper_model,
-                audio_path=tmp_path,
-                lang=lang,
-            )
+            output = app_state.whisper_model.transcribe(processed_path, language=lang)
+            text = output["text"].strip() if isinstance(output, dict) else ""
         else:
-            stt = STT(lang=lang, model=chosen_model, audio_file_path=tmp_path)
+            stt = STT(lang=lang, model=chosen_model, audio_file_path=processed_path)
             text = stt.transcribe()
 
-        logger.info("Transcription complete: %d chars", len(text or ""))
         return text or ""
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-            logger.debug("Deleted temp audio file: %s", tmp_path)
-
 
 def _extension_from_content_type(content_type: str | None) -> str:
     """Map MIME type to a file extension for temp file naming."""

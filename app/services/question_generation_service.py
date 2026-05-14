@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 from typing import Dict
+import asyncio
+from functools import partial
 
 from ai_ml.question_generator import QuestionGenerator
 from ai_ml.exceptions import QuestionsGenerationError
@@ -27,7 +29,7 @@ def _get_generator() -> QuestionGenerator:
     return _generator
 
 
-def generate_questions(payload: QuestionGenerationRequest) -> QuestionGenerationResponse:
+async def generate_questions(payload: QuestionGenerationRequest) -> QuestionGenerationResponse:
     """
     Generate questions for one or more topics.
 
@@ -41,27 +43,23 @@ def generate_questions(payload: QuestionGenerationRequest) -> QuestionGeneration
     Returns:
         :class:`QuestionGenerationResponse` mapping topic → question dict.
     """
+    
     generator = _get_generator()
-    results: Dict[str, dict] = {}
+    loop = asyncio.get_running_loop()
 
-    for topic in payload.topics:
-        logger.info(
-            "Generating %d '%s' questions for topic: %s",
-            payload.num_questions,
-            payload.difficulty,
-            topic,
-        )
+    def _generate_one(topic):
         try:
             questions = generator.generate(
                 topic=topic,
                 num_questions=payload.num_questions,
                 difficulty=payload.difficulty,
             )
-            results[topic] = {
-                str(idx + 1): question for idx, question in enumerate(questions)
-            }
+            return topic, {str(idx + 1): q for idx, q in enumerate(questions)}
         except QuestionsGenerationError as exc:
             logger.error("Question generation failed for topic '%s': %s", topic, exc)
-            results[topic] = {"error": str(exc)}
+            return topic, {"error": str(exc)}
 
+    tasks = [loop.run_in_executor(None, _generate_one, topic) for topic in payload.topics]
+    results_list = await asyncio.gather(*tasks)
+    results = dict(results_list)
     return QuestionGenerationResponse(topics=results)

@@ -34,7 +34,7 @@ async def generate_questions_endpoint(payload: QuestionGenerationRequest) -> Que
     Each topic is processed independently.  Results are keyed by topic name.
     """
     try:
-        result = generate_questions(payload)
+        result = await generate_questions(payload)
     except Exception:
         logger.exception("Unexpected error during question generation")
         raise HTTPException(status_code=500, detail="Question generation failed due to an internal error.")

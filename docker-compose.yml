@@ -21,7 +21,7 @@ services:
       - "8000:8000"
     environment:
       OLLAMA_BASE_URL: "http://ollama:11434"
-      OLLAMA_MODEL_NAME: "mistral:7b"
+      OLLAMA_MODEL_NAME: "mistral:7b-instruct-q4_K_M"
       OLLAMA_TEMPERATURE: "0.0"
       OLLAMA_MAX_TOKENS: "2048"
       WHISPER_MODEL_SIZE: "base"

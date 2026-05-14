@@ -24,9 +24,10 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from ai_ml.audio_preprocessor import AudioPreprocessor
+from ai_ml.audio_preprocessor import AudioPreprocessor, AudioPreprocessorConfig
 from ai_ml.exceptions import AudioProcessingError, IllegalModelSelectionError
 from ai_ml.model_creator import WhisperModelLoader
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,9 @@ class STT:
         Raises:
             AudioProcessingError: If preprocessing fails.
         """
-        preprocessor = AudioPreprocessor()
+        preprocessor = AudioPreprocessor(
+            AudioPreprocessorConfig(vad_enabled=settings.STT_VAD_ENABLED)
+        )
         result = preprocessor.preprocess_file(audio_path)
         processed_path = result.metadata.processed_path
 
@@ -122,7 +125,9 @@ class STT:
         try:
             from transformers import pipeline as hf_pipeline  # noqa: PLC0415
 
-            preprocessor = AudioPreprocessor()
+            preprocessor = AudioPreprocessor(
+                AudioPreprocessorConfig(vad_enabled=settings.STT_VAD_ENABLED)
+            )
             result = preprocessor.preprocess_file(self.audio_file_path)
             processed_path = result.metadata.processed_path
 

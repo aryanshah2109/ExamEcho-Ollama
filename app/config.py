@@ -18,10 +18,16 @@ class Settings(BaseSettings):
     OLLAMA_MODEL_NAME: str = "mistral:7b"
     OLLAMA_TEMPERATURE: float = 0.0
     OLLAMA_MAX_TOKENS: int = 2048
+    OLLAMA_NUM_CTX: int = 2048
+    OLLAMA_MAX_TOKENS_EVAL: int = 512
+    OLLAMA_MAX_TOKENS_QUESTIONS: int = 800
+    OLLAMA_MAX_TOKENS_RUBRICS: int = 400
+    OLLAMA_MAX_TOKENS_MCQ: int = 800
 
     # Whisper
     WHISPER_MODEL_SIZE: str = "base"          # tiny | base | small | medium | large
     STT_DEFAULT_MODEL: str = "whisper"        # whisper | hf
+    STT_VAD_ENABLED: bool = False
 
     # MCQ Evaluation
     MCQ_EVAL_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"

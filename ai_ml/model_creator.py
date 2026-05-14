@@ -213,7 +213,7 @@ class OllamaModelLoader:
                     base_url=settings.OLLAMA_BASE_URL,
                     model=settings.OLLAMA_MODEL_NAME,
                     temperature=settings.OLLAMA_TEMPERATURE,
-                    num_predict=settings.OLLAMA_MAX_TOKENS,
+                    num_ctx=settings.OLLAMA_NUM_CTX,
                 )
                 logger.info(
                     "Ollama model '%s' initialised successfully.",

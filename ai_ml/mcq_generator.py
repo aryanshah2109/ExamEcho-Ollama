@@ -13,55 +13,37 @@ import re
 from typing import List, Dict, Any
 
 from langchain_core.prompts import PromptTemplate
+from langchain_ollama import ChatOllama
 
 from ai_ml.exceptions import ChainCreationError, QuestionsGenerationError
 from ai_ml.model_creator import OllamaModelLoader
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-# Mistral-optimised prompt for MCQs
 _MCQ_TEMPLATE = """\
 [INST]
-You are an academic exam question setter. You MUST respond with ONLY a valid JSON object.
-No explanation, no markdown, no preamble.
+You are an academic exam question setter. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
 
-Task:
-Generate EXACTLY {num_questions} Multiple Choice Questions (MCQs) for the given TOPIC.
-
-General Rules:
-- Questions must be clear, concise, and exam-appropriate.
-- Each question MUST have exactly 4 options (A, B, C, D).
-- One and only one option can be the correct answer.
+Rules:
+- Generate EXACTLY {num_questions} MCQs for the TOPIC below.
+- Each question must have exactly 4 options prefixed with A:, B:, C:, D:.
+- Exactly one option must be correct.
+- correct_option must be the exact full string of the correct option (e.g. "A: some text").
+- NO code, NO programs, NO algorithms unless the topic demands it.
 - Stay strictly within the TOPIC.
-- NO code, NO programs, NO algorithms unless requested by the topic.
-
-Difficulty Guidelines:
-  EASY   → definitions, meanings, purposes
-  MEDIUM → explanations, reasoning, simple examples
-  HARD   → critical thinking, limitations, trade-offs, applications
-
-Output Rules (MANDATORY):
-- Return ONLY valid JSON — no markdown, no comments, no extra text before or after.
-- "mcqs" MUST be a JSON array of exactly {num_questions} objects.
-- Each object must have "question", "options" (a list of 4 strings prefixed with A:, B:, C:, D:), and "correct_option" (the exact string of the correct option).
-
-Required JSON format (copy this structure exactly):
-{{
-  "topic": "{topic}",
-  "mcqs": [
-    {{
-      "question": "<question text>",
-      "options": ["A: <option A>", "B: <option B>", "C: <option C>", "D: <option D>"],
-      "correct_option": "<The correct option string, e.g., 'A: <option A>'>"
-    }}
-  ]
-}}
+- Difficulty guidelines:
+  EASY   : definitions, meanings, purposes
+  MEDIUM : explanations, reasoning, simple examples
+  HARD   : critical thinking, limitations, trade-offs, applications
 
 TOPIC: {topic}
 DIFFICULTY: {difficulty}
-[/INST]"""
 
+Respond with ONLY this JSON:
+{{"topic":"{topic}","mcqs":[{{"question":"<question text>","options":["A: <option>","B: <option>","C: <option>","D: <option>"],"correct_option":"A: <option>"}}]}}
+[/INST]"""
 
 class MCQGenerator:
     """
@@ -85,7 +67,16 @@ class MCQGenerator:
                 template=_MCQ_TEMPLATE,
                 input_variables=["num_questions", "topic", "difficulty"],
             )
-            return prompt | self._get_model()
+            model = ChatOllama(
+                base_url=settings.OLLAMA_BASE_URL,
+                model=settings.OLLAMA_MODEL_NAME,
+                temperature=settings.OLLAMA_TEMPERATURE,
+                num_ctx=settings.OLLAMA_NUM_CTX,
+                options={
+                    "num_predict": settings.OLLAMA_MAX_TOKENS_RUBRICS
+                }
+            )
+            return prompt | model
         except Exception as exc:
             raise ChainCreationError(
                 f"Could not build MCQ generation chain: {exc}"

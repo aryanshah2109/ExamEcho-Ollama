@@ -69,19 +69,18 @@ async def lifespan(app: FastAPI):
     try:
         from ai_ml.model_creator import OllamaModelLoader
         app_state.ollama_model = OllamaModelLoader.get_model()
-        logger.info(
-            "✓ Ollama model '%s' ready at %s",
-            settings.OLLAMA_MODEL_NAME,
-            settings.OLLAMA_BASE_URL,
-        )
+        logger.info("✓ Ollama model '%s' ready", settings.OLLAMA_MODEL_NAME)
     except Exception as exc:
         logger.error("✗ Ollama model failed to load: %s", exc)
-        logger.warning(
-            "  Question generation, rubric generation, and answer evaluation will not be functional.\n"
-            "  Check that Ollama is running ('ollama serve') and the model is pulled "
-            "('ollama pull %s').",
-            settings.OLLAMA_MODEL_NAME,
-        )
+
+    # Warmup
+    if app_state.ollama_model is not None:
+        try:
+            logger.info("Warming up Ollama model...")
+            app_state.ollama_model.invoke("ping")
+            logger.info("✓ Ollama warmup complete")
+        except Exception as exc:
+            logger.warning("Warmup call failed (non-fatal): %s", exc)
 
     # SentenceTransformer (MCQ evaluation)
     try:

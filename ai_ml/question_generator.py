@@ -17,47 +17,37 @@ import re
 from typing import List
 
 from langchain_core.prompts import PromptTemplate
+from langchain_ollama import ChatOllama
 
 from ai_ml.exceptions import ChainCreationError, QuestionsGenerationError
 from ai_ml.model_creator import OllamaModelLoader
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-# Mistral-optimised prompt: explicit JSON-only instruction placed at top and
-# bottom to overcome the model's tendency to add prose preambles.
+
+# Prompt
+
 _QUESTION_TEMPLATE = """\
 [INST]
-You are an academic exam question setter. You MUST respond with ONLY a valid JSON object.
-No explanation, no markdown, no preamble.
+You are an academic exam question setter. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
 
-Task:
-Generate EXACTLY {num_questions} theory-based exam questions for the given TOPIC.
-
-General Rules:
-- Questions must be verbally answerable.
-- NO code, NO programs, NO algorithms.
-- Language must be clear and exam-appropriate.
-- Stay strictly within the TOPIC.
+Rules:
+- Generate EXACTLY {num_questions} theory-based exam questions for the TOPIC below.
+- Questions must be verbally answerable. NO code, NO programs, NO algorithms.
 - Each question must be a complete sentence ending with a question mark.
-
-Difficulty Guidelines:
-  EASY   → definitions, meanings, purposes
-  MEDIUM → explanations, reasoning, simple examples
-  HARD   → critical thinking, limitations, trade-offs, applications
-
-Output Rules (MANDATORY):
-- Return ONLY valid JSON — no markdown, no comments, no extra text before or after.
-- "questions" MUST be a JSON array of exactly {num_questions} strings.
-
-Required JSON format (copy this structure exactly):
-{{
-  "topic": "{topic}",
-  "questions": ["<question 1>", "<question 2>"]
-}}
+- Stay strictly within the TOPIC.
+- Difficulty guidelines:
+  EASY   : definitions, meanings, purposes
+  MEDIUM : explanations, reasoning, simple examples
+  HARD   : critical thinking, limitations, trade-offs, applications
 
 TOPIC: {topic}
 DIFFICULTY: {difficulty}
+
+Respond with ONLY this JSON:
+{{"topic":"{topic}","questions":["<question 1>","<question 2>"]}}
 [/INST]"""
 
 
@@ -83,7 +73,17 @@ class QuestionGenerator:
                 template=_QUESTION_TEMPLATE,
                 input_variables=["num_questions", "topic", "difficulty"],
             )
-            return prompt | self._get_model()
+            model = ChatOllama(
+                base_url=settings.OLLAMA_BASE_URL,
+                model=settings.OLLAMA_MODEL_NAME,
+                temperature=settings.OLLAMA_TEMPERATURE,
+                num_ctx=settings.OLLAMA_NUM_CTX,
+                options={
+                    "num_predict": settings.OLLAMA_MAX_TOKENS_QUESTIONS
+                }
+            )
+            return prompt | model
+        
         except Exception as exc:
             raise ChainCreationError(
                 f"Could not build question generation chain: {exc}"

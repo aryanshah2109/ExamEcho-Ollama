@@ -14,11 +14,13 @@ import logging
 from typing import List
 
 from langchain_core.prompts import PromptTemplate
+from langchain_ollama import ChatOllama
 from pydantic import BaseModel, field_validator
 
 from ai_ml.exceptions import EvaluationError
 from ai_ml.model_creator import OllamaModelLoader
 from app.utils.json_utils import extract_json
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +59,16 @@ class EvalResult(BaseModel):
 
 _EVAL_TEMPLATE = """\
 [INST]
-You are a strict academic exam evaluator. You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
+You are a strict academic exam evaluator. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
 
-Evaluation Rules:
+Rules:
 - Score the student answer against the rubric criteria.
 - If the student answer is "I don't know", blank, or completely off-topic, score MUST be 0.
-- score must be an integer between 0 and {max_marks}.
-- strengths and weakness must each be a JSON array of strings (can be empty arrays).
-- justification and suggested_improvement must be plain strings.
+- score: integer between 0 and {max_marks}.
+- strengths: array of strings (can be empty array).
+- weakness: array of strings (can be empty array).
+- justification: plain string.
+- suggested_improvement: plain string.
 
 Rubric:
 {rubric}
@@ -77,16 +81,9 @@ Student Answer:
 
 Maximum Marks: {max_marks}
 
-Return ONLY this JSON (no markdown, no extra text):
-{{
-  "score": 0,
-  "strengths": [],
-  "weakness": [],
-  "justification": "",
-  "suggested_improvement": ""
-}}
+Respond with ONLY this JSON:
+{{"score":0,"strengths":[],"weakness":[],"justification":"","suggested_improvement":""}}
 [/INST]"""
-
 
 class EvaluationEngine:
     """
@@ -110,7 +107,16 @@ class EvaluationEngine:
             template=_EVAL_TEMPLATE,
             input_variables=["rubric", "question_text", "student_answer", "max_marks"],
         )
-        return prompt | self._get_model()
+        model = ChatOllama(
+            base_url=settings.OLLAMA_BASE_URL,
+            model=settings.OLLAMA_MODEL_NAME,
+            temperature=settings.OLLAMA_TEMPERATURE,
+            num_ctx=settings.OLLAMA_NUM_CTX,
+            options={
+                "num_predict": settings.OLLAMA_MAX_TOKENS_EVAL
+            }
+        )
+        return prompt | model
 
     def evaluate(
         self,

@@ -34,7 +34,7 @@ async def generate_mcqs_endpoint(payload: MCQGenerationRequest) -> MCQGeneration
     Each topic is processed independently. Results are keyed by topic name.
     """
     try:
-        result = generate_mcqs(payload)
+        result = await generate_mcqs(payload)
     except Exception:
         logger.exception("Unexpected error during MCQ generation")
         raise HTTPException(status_code=500, detail="MCQ generation failed due to an internal error.")

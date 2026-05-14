@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Union, List
+import asyncio
+from functools import partial
 
 from ai_ml.mcq_generator import MCQGenerator
 from ai_ml.exceptions import QuestionsGenerationError
@@ -27,7 +29,7 @@ def _get_generator() -> MCQGenerator:
     return _generator
 
 
-def generate_mcqs(payload: MCQGenerationRequest) -> MCQGenerationResponse:
+async def generate_mcqs(payload: MCQGenerationRequest) -> MCQGenerationResponse:
     """
     Generate MCQs for one or more topics.
 
@@ -42,30 +44,21 @@ def generate_mcqs(payload: MCQGenerationRequest) -> MCQGenerationResponse:
         :class:`MCQGenerationResponse` mapping topic → list of MCQItems or error dict.
     """
     generator = _get_generator()
-    results: Dict[str, Union[List[MCQItem], Dict[str, str]]] = {}
+    loop = asyncio.get_running_loop()
 
-    for topic in payload.topics:
-        logger.info(
-            "Generating %d '%s' MCQs for topic: %s",
-            payload.num_questions,
-            payload.difficulty,
-            topic,
-        )
+    def _generate_one(topic):
         try:
             raw_mcqs = generator.generate(
                 topic=topic,
                 num_questions=payload.num_questions,
                 difficulty=payload.difficulty,
             )
-            
-            mcq_items = []
-            for mcq_dict in raw_mcqs:
-                mcq_items.append(MCQItem(**mcq_dict))
-                
-            results[topic] = mcq_items
-            
+            return topic, [MCQItem(**m) for m in raw_mcqs]
         except QuestionsGenerationError as exc:
             logger.error("MCQ generation failed for topic '%s': %s", topic, exc)
-            results[topic] = {"error": str(exc)}
+            return topic, {"error": str(exc)}
 
+    tasks = [loop.run_in_executor(None, _generate_one, topic) for topic in payload.topics]
+    results_list = await asyncio.gather(*tasks)
+    results = dict(results_list)
     return MCQGenerationResponse(topics=results)

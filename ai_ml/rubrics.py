@@ -12,11 +12,13 @@ import logging
 from typing import List
 
 from langchain_core.prompts import PromptTemplate
+from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field, field_validator
 
 from ai_ml.exceptions import RubricsGenerationError
 from ai_ml.model_creator import OllamaModelLoader
 from app.utils.json_utils import extract_json
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,28 +46,22 @@ class RubricsResult(BaseModel):
 
 _RUBRICS_TEMPLATE = """\
 [INST]
-You are an academic exam evaluator. You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
-
-Task:
-Generate marking rubrics for the question below.
+You are an academic exam evaluator. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
 
 Rules:
-- Each rubric item must be a clear, distinct evaluative criterion (a single sentence).
-- Generate approximately one rubric per 2–3 marks (e.g. 10 marks → 4–5 rubrics).
-- Rubrics must be specific enough to guide a human marker.
+- Generate one rubric criterion per 2-3 marks (e.g. 10 marks = 4-5 rubrics).
+- Each criterion must be a single, specific, evaluative sentence.
 - Do NOT include generic rubrics like "Good effort" or "Clear writing".
-
-Return ONLY this JSON (no markdown, no extra text):
-{{
-  "question_text": "{question_text}",
-  "rubrics": ["criterion 1", "criterion 2", "criterion 3"]
-}}
 
 Question:
 {question_text}
 
 Total Marks: {max_marks}
+
+Respond with ONLY this JSON:
+{{"question_text":"{question_text}","rubrics":["criterion 1","criterion 2","criterion 3"]}}
 [/INST]"""
+
 
 
 class RubricsEngine:
@@ -89,7 +85,16 @@ class RubricsEngine:
             template=_RUBRICS_TEMPLATE,
             input_variables=["question_text", "max_marks"],
         )
-        return prompt | self._get_model()
+        model = ChatOllama(
+            base_url=settings.OLLAMA_BASE_URL,
+            model=settings.OLLAMA_MODEL_NAME,
+            temperature=settings.OLLAMA_TEMPERATURE,
+            num_ctx=settings.OLLAMA_NUM_CTX,
+            options={
+                "num_predict": settings.OLLAMA_MAX_TOKENS_MCQ
+            }
+        )
+        return prompt | model
 
     def generate(self, *, question_text: str, max_marks: int) -> RubricsResult:
         """
