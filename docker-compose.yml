@@ -7,6 +7,13 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "ollama list || exit 1"]
       interval: 10s
@@ -24,6 +31,7 @@ services:
       OLLAMA_MODEL_NAME: "mistral:7b"
       OLLAMA_TEMPERATURE: "0.0"
       OLLAMA_MAX_TOKENS: "2048"
+      OLLAMA_NUM_GPU: "-1"
       WHISPER_MODEL_SIZE: "base"
       TTS_AUDIO_DIR: "/app/generated_audio"
       CORS_ORIGINS: '["*"]'
