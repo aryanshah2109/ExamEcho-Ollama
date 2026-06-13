@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     OLLAMA_MODEL_NAME: str = "mistral:7b"
     OLLAMA_TEMPERATURE: float = 0.0
     OLLAMA_MAX_TOKENS: int = 2048
+    OLLAMA_NUM_GPU: int = -1
 
     # Whisper
     WHISPER_MODEL_SIZE: str = "base"          # tiny | base | small | medium | large

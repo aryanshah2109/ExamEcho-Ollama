@@ -214,6 +214,7 @@ class OllamaModelLoader:
                     model=settings.OLLAMA_MODEL_NAME,
                     temperature=settings.OLLAMA_TEMPERATURE,
                     num_predict=settings.OLLAMA_MAX_TOKENS,
+                    num_gpu=settings.OLLAMA_NUM_GPU,
                 )
                 logger.info(
                     "Ollama model '%s' initialised successfully.",

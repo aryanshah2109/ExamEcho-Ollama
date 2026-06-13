@@ -26,6 +26,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core.state import app_state
 
+# Reconfigure stdout/stderr to UTF-8 encoding on Windows to prevent UnicodeEncodeError in logging
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,

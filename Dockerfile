@@ -1,29 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# ExamEcho AI Service — Dockerfile (Ollama edition)
-#
-# This container runs ONLY the FastAPI service.
-# Ollama must run as a SEPARATE container or host process.
-#
-# Docker Compose example (docker-compose.yml):
-#
-#   services:
-#     ollama:
-#       image: ollama/ollama
-#       ports: ["11434:11434"]
-#       volumes: ["ollama_data:/root/.ollama"]
-#
-#     examecho-ai:
-#       build: .
-#       ports: ["8000:8000"]
-#       environment:
-#         OLLAMA_BASE_URL: "http://ollama:11434"
-#         OLLAMA_MODEL_NAME: "mistral:7b"
-#       depends_on: [ollama]
-#
-#   volumes:
-#     ollama_data:
-# ─────────────────────────────────────────────────────────────────────────────
-
 FROM python:3.11-slim
 
 # System deps: ffmpeg (audio conversion) + build tools for webrtcvad
