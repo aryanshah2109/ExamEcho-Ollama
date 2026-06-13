@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from ai_ml.exceptions import EvaluationError
+from ai_ml.exceptions import EvaluationError, LLMServiceError
 from app.schemas.evaluation import EvaluateAnswer, EvaluateAnswerResponse
 from app.services.evaluation_service import evaluate_answer
 
@@ -36,6 +36,9 @@ async def evaluate_answer_endpoint(payload: EvaluateAnswer) -> EvaluateAnswerRes
     """
     try:
         return evaluate_answer(payload)
+    except LLMServiceError as exc:
+        logger.error("OpenAI provider error for question_id=%s: %s", payload.question_id, exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except EvaluationError as exc:
         logger.error("Evaluation error for question_id=%s: %s", payload.question_id, exc)
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {exc}")

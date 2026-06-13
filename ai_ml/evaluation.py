@@ -1,11 +1,8 @@
 """
 Viva / long-answer evaluation engine.
 
-Sends the student's answer to the local Ollama model (mistral:7b) with a
-rubric and returns a structured :class:`EvalResult` containing score,
-strengths, weaknesses, justification, and improvement suggestions.
-
-The prompt uses Mistral's [INST] instruction format for reliable JSON output.
+Uses OpenAI structured outputs to score a student answer against a rubric
+and returns a validated, deterministic payload.
 """
 
 from __future__ import annotations
@@ -13,19 +10,14 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, field_validator
 
-from ai_ml.exceptions import EvaluationError
-from ai_ml.model_creator import OllamaModelLoader
-from app.utils.json_utils import extract_json
+from ai_ml.exceptions import EvaluationError, LLMServiceError
+from ai_ml.openai_llm import OpenAIStructuredCaller
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-# Pydantic schema for LLM output
 
 class EvalResult(BaseModel):
     """Validated structure for a single evaluation response."""
@@ -38,85 +30,37 @@ class EvalResult(BaseModel):
 
     @field_validator("score", mode="before")
     @classmethod
-    def _coerce_score(cls, v) -> int:
-        """Accept float scores from the LLM and round to int."""
+    def _coerce_score(cls, value) -> int:
         try:
-            return int(round(float(v)))
+            return int(round(float(value)))
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"score must be numeric, got {v!r}") from exc
+            raise ValueError(f"score must be numeric, got {value!r}") from exc
 
     @field_validator("strengths", "weakness", mode="before")
     @classmethod
-    def _ensure_list(cls, v) -> List[str]:
-        if v is None:
+    def _ensure_list(cls, value) -> List[str]:
+        if value is None:
             return []
-        if isinstance(v, str):
-            return [v]
-        return [str(item) for item in v]
+        if isinstance(value, str):
+            return [value]
+        return [str(item) for item in value]
 
 
-# Evaluation engine
+_SYSTEM_PROMPT = (
+    "You are a strict academic exam evaluator. "
+    "Score answers fairly and return only structured data."
+)
 
-_EVAL_TEMPLATE = """\
-[INST]
-You are a strict academic exam evaluator. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
+_PROMPT_VERSION = "openai-evaluation-v1"
 
-Rules:
-- Score the student answer against the rubric criteria.
-- If the student answer is "I don't know", blank, or completely off-topic, score MUST be 0.
-- score: integer between 0 and {max_marks}.
-- strengths: array of strings (can be empty array).
-- weakness: array of strings (can be empty array).
-- justification: plain string.
-- suggested_improvement: plain string.
-
-Rubric:
-{rubric}
-
-Question:
-{question_text}
-
-Student Answer:
-{student_answer}
-
-Maximum Marks: {max_marks}
-
-Respond with ONLY this JSON:
-{{"score":0,"strengths":[],"weakness":[],"justification":"","suggested_improvement":""}}
-[/INST]"""
 
 class EvaluationEngine:
     """
-    Evaluates a student's answer using a local Ollama model with a provided rubric.
-
-    Args:
-        model: Pre-loaded ChatOllama instance. If ``None``, the engine uses
-               the singleton loader on first use.
+    Evaluates a student's answer using OpenAI structured outputs.
     """
 
-    def __init__(self, model=None) -> None:
-        self._model = model
-
-    def _get_model(self):
-        if self._model is None:
-            self._model = OllamaModelLoader.get_model()
-        return self._model
-
-    def _build_chain(self):
-        prompt = PromptTemplate(
-            template=_EVAL_TEMPLATE,
-            input_variables=["rubric", "question_text", "student_answer", "max_marks"],
-        )
-        model = ChatOllama(
-            base_url=settings.OLLAMA_BASE_URL,
-            model=settings.OLLAMA_MODEL_NAME,
-            temperature=settings.OLLAMA_TEMPERATURE,
-            num_ctx=settings.OLLAMA_NUM_CTX,
-            options={
-                "num_predict": settings.OLLAMA_MAX_TOKENS_EVAL
-            }
-        )
-        return prompt | model
+    def __init__(self, client=None) -> None:
+        self._caller = OpenAIStructuredCaller(client=client)
 
     def evaluate(
         self,
@@ -126,51 +70,43 @@ class EvaluationEngine:
         rubric: List[str],
         max_marks: float,
     ) -> EvalResult:
-        """
-        Evaluate a student answer against a rubric.
-
-        Args:
-            question_text:  The exam question being answered.
-            student_answer: The student's verbatim answer.
-            rubric:         List of marking criteria.
-            max_marks:      Maximum marks available for this question.
-
-        Returns:
-            :class:`EvalResult` with score, feedback, and suggestions.
-
-        Raises:
-            EvaluationError: If the Ollama call or JSON parsing fails.
-        """
-        rubric_text = "\n".join(f"- {r}" for r in rubric)
+        rubric_text = "\n".join(f"- {item}" for item in rubric)
+        user_prompt = (
+            f"Rubric:\n{rubric_text}\n\n"
+            f"Question:\n{question_text}\n\n"
+            f"Student answer:\n{student_answer}\n\n"
+            f"Maximum marks: {int(max_marks)}\n\n"
+            "Rules:\n"
+            f"- Score must be an integer between 0 and {int(max_marks)}.\n"
+            '- If the answer is "I don\'t know", blank, or off-topic, the score must be 0.\n'
+            "- strengths: array of short strings.\n"
+            "- weakness: array of short strings.\n"
+            "- justification: short explanation of the score.\n"
+            "- suggested_improvement: one actionable suggestion."
+        )
 
         try:
-            chain = self._build_chain()
-            raw = chain.invoke({
-                "rubric": rubric_text,
-                "question_text": question_text,
-                "student_answer": student_answer,
-                "max_marks": int(max_marks),
-            })
+            result = self._caller.parse(
+                cache_namespace="evaluation",
+                model=settings.OPENAI_MODEL_EVAL,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=EvalResult,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_EVAL,
+                cache_inputs={
+                    "question_text": question_text,
+                    "student_answer": student_answer,
+                    "rubric": rubric,
+                    "max_marks": int(max_marks),
+                    "prompt_version": _PROMPT_VERSION,
+                },
+            )
+        except LLMServiceError:
+            raise
         except Exception as exc:
-            logger.error("Ollama call failed during evaluation: %s", exc)
+            logger.error("OpenAI call failed during evaluation: %s", exc)
             raise EvaluationError(f"LLM call failed: {exc}") from exc
 
-        content = raw.content if hasattr(raw, "content") else str(raw)
-        logger.debug("Evaluation raw output (%d chars)", len(content))
-
-        try:
-            data = extract_json(content)
-            result = EvalResult(**data)
-        except Exception as exc:
-            logger.error(
-                "Failed to parse evaluation response. Raw output (first 500 chars): %s",
-                content[:500],
-            )
-            raise EvaluationError(
-                f"Could not parse evaluation response: {exc}"
-            ) from exc
-
-        # Clamp score to valid range
         result = result.model_copy(
             update={"score": max(0, min(result.score, int(max_marks)))}
         )

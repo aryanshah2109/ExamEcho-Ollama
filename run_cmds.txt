@@ -3,12 +3,21 @@ From your `docker-compose.yml` and `README.md`:
 **First time setup:**
 ```bash
 docker compose up -d
-docker compose exec ollama ollama pull mistral:7b
 ```
 
 **Check if it's ready:**
 ```bash
 curl http://localhost:8000/health
+```
+
+**Inspect OpenAI backend configuration:**
+```bash
+curl http://localhost:8000/health/openai
+```
+
+**Check Redis cache reachability:**
+```bash
+curl http://localhost:8000/health/redis
 ```
 
 **Subsequent starts:**
@@ -21,4 +30,3 @@ docker compose up -d
 docker compose down
 ```
 
-The model pull (~4 GB) only needs to be done once since it's stored in the `ollama_data` volume.

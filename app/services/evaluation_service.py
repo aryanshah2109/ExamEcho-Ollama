@@ -12,14 +12,14 @@ from app.schemas.evaluation import EvaluateAnswer, EvaluateAnswerResponse
 
 logger = logging.getLogger(__name__)
 
-# Module-level engine instance (uses the preloaded Ollama model from startup)
+# Module-level engine instance (uses the preloaded OpenAI client from startup)
 _engine: EvaluationEngine | None = None
 
 
 def _get_engine() -> EvaluationEngine:
     global _engine
     if _engine is None:
-        _engine = EvaluationEngine(model=app_state.ollama_model)
+        _engine = EvaluationEngine(client=app_state.openai_client)
     return _engine
 
 

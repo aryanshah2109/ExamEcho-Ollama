@@ -13,16 +13,35 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Ollama (local LLM)
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL_NAME: str = "mistral:7b"
-    OLLAMA_TEMPERATURE: float = 0.0
-    OLLAMA_MAX_TOKENS: int = 2048
-    OLLAMA_NUM_CTX: int = 2048
-    OLLAMA_MAX_TOKENS_EVAL: int = 512
-    OLLAMA_MAX_TOKENS_QUESTIONS: int = 800
-    OLLAMA_MAX_TOKENS_RUBRICS: int = 400
-    OLLAMA_MAX_TOKENS_MCQ: int = 800
+    # OpenAI (hosted LLM)
+    OPENAI_API_KEY: str = ""
+    OPENAI_ORGANIZATION_ID: str | None = None
+    OPENAI_PROJECT_ID: str | None = None
+    OPENAI_BASE_URL: str | None = None
+    OPENAI_MODEL_QUESTION: str = "gpt-5.4-nano"
+    OPENAI_MODEL_RUBRIC: str = "gpt-5.4-nano"
+    OPENAI_MODEL_EVAL: str = "gpt-5.4-mini"
+    OPENAI_MODEL_MCQ: str = "gpt-5.4-nano"
+    OPENAI_TEMPERATURE: float = 0.0
+    OPENAI_MAX_OUTPUT_TOKENS_QUESTION: int = 1200
+    OPENAI_MAX_OUTPUT_TOKENS_RUBRIC: int = 300
+    OPENAI_MAX_OUTPUT_TOKENS_EVAL: int = 700
+    OPENAI_MAX_OUTPUT_TOKENS_MCQ: int = 1400
+    OPENAI_TIMEOUT_SECONDS: float = 30.0
+    OPENAI_MAX_RETRIES: int = 1
+    OPENAI_GENERATION_CHUNK_SIZE: int = 10
+    OPENAI_TOPIC_BATCH_SIZE: int = 4
+
+    # LLM cache
+    LLM_CACHE_ENABLED: bool = True
+    LLM_CACHE_BACKEND: str = "redis"   # redis | sqlite
+    REDIS_URL: str = ""
+    REDIS_CACHE_PREFIX: str = "examecho:llm:"
+    REDIS_CONNECT_RETRIES: int = 3
+    REDIS_CONNECT_BACKOFF_SECONDS: float = 0.5
+    REDIS_CONNECT_TIMEOUT_SECONDS: float = 2.0
+    LLM_CACHE_PATH: str = ".cache/llm_cache.sqlite3"
+    LLM_CACHE_TTL_SECONDS: int = 7 * 24 * 60 * 60
 
     # Whisper
     WHISPER_MODEL_SIZE: str = "base"          # tiny | base | small | medium | large
@@ -46,7 +65,7 @@ class Settings(BaseSettings):
     APP_DESCRIPTION: str = (
         "AI microservice powering ExamEcho: STT, TTS, "
         "question generation, rubric creation, and answer evaluation. "
-        "Uses Ollama (mistral:7b) for all LLM tasks — no external API key required."
+        "Uses OpenAI for all LLM tasks."
     )
 
     class Config:

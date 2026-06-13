@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from ai_ml.exceptions import LLMServiceError
 from app.schemas.question_generation import QuestionGenerationRequest, QuestionGenerationResponse
 from app.services.question_generation_service import generate_questions
 
@@ -35,6 +36,9 @@ async def generate_questions_endpoint(payload: QuestionGenerationRequest) -> Que
     """
     try:
         result = await generate_questions(payload)
+    except LLMServiceError as exc:
+        logger.error("OpenAI provider error during question generation: %s", exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception:
         logger.exception("Unexpected error during question generation")
         raise HTTPException(status_code=500, detail="Question generation failed due to an internal error.")

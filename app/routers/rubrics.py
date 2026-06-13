@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from ai_ml.exceptions import RubricsGenerationError
+from ai_ml.exceptions import LLMServiceError, RubricsGenerationError
 from app.schemas.rubrics import RubricsRequest, RubricsResponse
 from app.services.rubrics_service import generate_rubrics
 
@@ -30,6 +30,9 @@ async def create_rubrics_endpoint(payload: RubricsRequest) -> RubricsResponse:
     """Generate rubrics for a single exam question."""
     try:
         return generate_rubrics(payload)
+    except LLMServiceError as exc:
+        logger.error("OpenAI provider error for question_id=%s: %s", payload.question_id, exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except RubricsGenerationError as exc:
         logger.error("Rubrics generation error for question_id=%s: %s", payload.question_id, exc)
         raise HTTPException(status_code=500, detail=f"Rubric generation failed: {exc}")

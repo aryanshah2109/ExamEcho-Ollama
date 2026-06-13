@@ -1,133 +1,224 @@
 """
 Question generation engine for ExamEcho.
 
-Generates theory-based exam questions for a given topic and difficulty
-using a local Ollama model (mistral:7b).
-Questions are verbally answerable (no code/algorithms).
-
-The prompt is carefully structured so that mistral:7b reliably produces
-valid JSON even without function-calling support.
+Uses OpenAI structured outputs to generate theory-based exam questions
+with deterministic formatting and persistent caching.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
+from collections.abc import Sequence
 from typing import List
 
-from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
+from pydantic import BaseModel, Field, field_validator
 
-from ai_ml.exceptions import ChainCreationError, QuestionsGenerationError
-from ai_ml.model_creator import OllamaModelLoader
+from ai_ml.exceptions import LLMServiceError, QuestionsGenerationError
+from ai_ml.openai_llm import OpenAIStructuredCaller
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
+class _QuestionBatch(BaseModel):
+    topic: str = Field(min_length=1)
+    questions: List[str] = Field(min_length=1)
 
-# Prompt
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _clean_questions(cls, value) -> List[str]:
+        if not isinstance(value, list):
+            raise ValueError("questions must be a list")
+        cleaned = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                cleaned.append(text)
+        if not cleaned:
+            raise ValueError("questions must contain at least one non-empty item")
+        return cleaned
 
-_QUESTION_TEMPLATE = """\
-[INST]
-You are an academic exam question setter. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
 
-Rules:
-- Generate EXACTLY {num_questions} theory-based exam questions for the TOPIC below.
-- Questions must be verbally answerable. NO code, NO programs, NO algorithms.
-- Each question must be a complete sentence ending with a question mark.
-- Stay strictly within the TOPIC.
-- Difficulty guidelines:
-  EASY   : definitions, meanings, purposes
-  MEDIUM : explanations, reasoning, simple examples
-  HARD   : critical thinking, limitations, trade-offs, applications
+class _QuestionTopicItem(BaseModel):
+    topic: str = Field(min_length=1)
+    questions: List[str] = Field(min_length=1)
 
-TOPIC: {topic}
-DIFFICULTY: {difficulty}
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _clean_questions(cls, value) -> List[str]:
+        if not isinstance(value, list):
+            raise ValueError("questions must be a list")
+        cleaned = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                cleaned.append(text)
+        if not cleaned:
+            raise ValueError("questions must contain at least one non-empty item")
+        return cleaned
 
-Respond with ONLY this JSON:
-{{"topic":"{topic}","questions":["<question 1>","<question 2>"]}}
-[/INST]"""
+
+class _QuestionTopicBatch(BaseModel):
+    topics: List[_QuestionTopicItem] = Field(min_length=1)
+
+    @field_validator("topics", mode="before")
+    @classmethod
+    def _clean_topics(cls, value) -> List[dict]:
+        if not isinstance(value, list):
+            raise ValueError("topics must be a list")
+        return value
+
+
+_SYSTEM_PROMPT = (
+    "You are an academic exam setter. "
+    "Generate concise, high-quality theory questions and return only structured data."
+)
+
+_PROMPT_VERSION = "openai-question-v1"
 
 
 class QuestionGenerator:
     """
-    Generates theory exam questions using a local Ollama model.
+    Generates theory exam questions using OpenAI structured outputs.
 
     Args:
-        model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
+        client: Preloaded OpenAI client instance (optional).
     """
 
-    def __init__(self, model=None) -> None:
-        self._model = model
+    def __init__(self, client=None) -> None:
+        self._client = client
+        self._caller = OpenAIStructuredCaller(client=client)
 
-    def _get_model(self):
-        if self._model is None:
-            self._model = OllamaModelLoader.get_model()
-        return self._model
+    def _generate_batch(self, *, topic: str, num_questions: int, difficulty: str) -> List[str]:
+        user_prompt = (
+            f"Topic: {topic}\n"
+            f"Difficulty: {difficulty}\n"
+            f"Task: Generate exactly {num_questions} theory-based exam questions.\n"
+            "Constraints:\n"
+            "- Questions must be verbally answerable.\n"
+            "- Do not produce code, programs, or algorithms unless the topic strictly requires them.\n"
+            "- Each question must be a complete sentence ending with a question mark.\n"
+            "- Stay strictly within the topic.\n"
+            "- Do not include numbering, markdown, explanations, or extra keys."
+        )
 
-    def _build_chain(self):
         try:
-            prompt = PromptTemplate(
-                template=_QUESTION_TEMPLATE,
-                input_variables=["num_questions", "topic", "difficulty"],
+            result = self._caller.parse(
+                cache_namespace="question_generation",
+                model=settings.OPENAI_MODEL_QUESTION,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=_QuestionBatch,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_QUESTION,
+                cache_inputs={
+                    "topic": topic,
+                    "num_questions": num_questions,
+                    "difficulty": difficulty,
+                    "prompt_version": _PROMPT_VERSION,
+                },
             )
-            model = ChatOllama(
-                base_url=settings.OLLAMA_BASE_URL,
-                model=settings.OLLAMA_MODEL_NAME,
-                temperature=settings.OLLAMA_TEMPERATURE,
-                num_ctx=settings.OLLAMA_NUM_CTX,
-                options={
-                    "num_predict": settings.OLLAMA_MAX_TOKENS_QUESTIONS
-                }
-            )
-            return prompt | model
-        
+        except LLMServiceError:
+            raise
         except Exception as exc:
-            raise ChainCreationError(
-                f"Could not build question generation chain: {exc}"
-            ) from exc
+            raise QuestionsGenerationError(f"OpenAI call failed: {exc}") from exc
 
-    @staticmethod
-    def _sanitize_json(text: str) -> str:
+        questions = self._normalize_questions(result.questions, num_questions)
+        if len(questions) < num_questions:
+            raise QuestionsGenerationError(
+                f"Expected {num_questions} questions but received only {len(questions)}."
+            )
+        return questions
+
+    def _generate_multi_topic_batch(
+        self,
+        *,
+        topics: Sequence[str],
+        num_questions: int,
+        difficulty: str,
+    ) -> dict[str, List[str]]:
+        topic_list = [str(topic).strip() for topic in topics if str(topic).strip()]
+        if not topic_list:
+            return {}
+
+        user_prompt = (
+            f"Topics: {', '.join(topic_list)}\n"
+            f"Difficulty: {difficulty}\n"
+            f"Task: For each topic, generate exactly {num_questions} theory-based exam questions.\n"
+            "Constraints:\n"
+            "- Questions must be verbally answerable.\n"
+            "- Do not produce code, programs, or algorithms unless the topic strictly requires them.\n"
+            "- Each question must be a complete sentence ending with a question mark.\n"
+            "- Stay strictly within each topic.\n"
+            "- Do not include numbering, markdown, explanations, or extra keys.\n"
+            "- Return one entry per topic."
+        )
+
+        try:
+            result = self._caller.parse(
+                cache_namespace="question_generation_multi",
+                model=settings.OPENAI_MODEL_QUESTION,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=_QuestionTopicBatch,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_QUESTION,
+                cache_inputs={
+                    "topics": topic_list,
+                    "num_questions": num_questions,
+                    "difficulty": difficulty,
+                    "prompt_version": _PROMPT_VERSION,
+                },
+            )
+        except LLMServiceError:
+            raise
+        except Exception as exc:
+            raise QuestionsGenerationError(f"OpenAI batch call failed: {exc}") from exc
+
+        mapped: dict[str, List[str]] = {}
+        for item in result.topics:
+            questions = self._normalize_questions(item.questions, num_questions)
+            if questions:
+                mapped[item.topic] = questions
+        return mapped
+
+    def generate_many(
+        self,
+        *,
+        topics: Sequence[str],
+        num_questions: int,
+        difficulty: str,
+    ) -> dict[str, List[str]]:
         """
-        Strip markdown fences, [INST]/[/INST] tags, and extract the first
-        valid JSON object from raw model output.
+        Generate questions for multiple topics.
 
-        Args:
-            text: Raw string from the LLM.
-
-        Returns:
-            JSON string ready for ``json.loads``.
-
-        Raises:
-            ValueError: If no valid JSON object is found after cleaning.
+        Topics are processed in batches to reduce request count and cost.
+        If a batch fails validation, callers may fall back to single-topic
+        generation for just that batch.
         """
-        # Remove Mistral instruction tokens that may leak into output
-        text = re.sub(r"\[/?INST\]", "", text)
-        # Remove markdown code fences
-        text = re.sub(r"```(?:json)?", "", text)
-        text = text.replace("```", "").strip()
+        results: dict[str, List[str]] = {}
+        batch_size = max(1, settings.OPENAI_TOPIC_BATCH_SIZE)
+        topic_list = [str(topic).strip() for topic in topics if str(topic).strip()]
 
-        decoder = json.JSONDecoder()
-        for i, ch in enumerate(text):
-            if ch == "{":
-                try:
-                    obj, _ = decoder.raw_decode(text[i:])
-                    return json.dumps(obj)
-                except json.JSONDecodeError:
-                    continue
-        raise ValueError("No valid JSON object found in model output.")
+        for start in range(0, len(topic_list), batch_size):
+            batch = topic_list[start:start + batch_size]
+            try:
+                batch_result = self._generate_multi_topic_batch(
+                    topics=batch,
+                    num_questions=num_questions,
+                    difficulty=difficulty,
+                )
+                results.update(batch_result)
+            except LLMServiceError:
+                # Let the service layer decide whether to fall back to single-topic retries.
+                raise
+
+        return results
 
     @staticmethod
     def _normalize_questions(raw_questions: list, num_questions: int) -> List[str]:
-        """Strip optional numbering prefixes and filter empty strings."""
         normalized = []
         for q in raw_questions:
             if isinstance(q, str):
-                # Remove leading "1. ", "1) ", etc.
-                q = re.sub(r"^\s*\d+[.)]\s*", "", q).strip()
+                q = q.strip()
                 if q:
                     normalized.append(q)
         return normalized[:num_questions]
@@ -136,18 +227,8 @@ class QuestionGenerator:
         """
         Generate exam questions for a topic.
 
-        Args:
-            topic:         Subject topic (e.g. "Binary Trees").
-            num_questions: Number of questions to generate (1–100).
-            difficulty:    One of ``"easy"``, ``"medium"``, ``"hard"``.
-
-        Returns:
-            List of question strings (length == ``num_questions``).
-
-        Raises:
-            ChainCreationError:      If the LangChain chain cannot be built.
-            QuestionsGenerationError: If generation fails or returns fewer
-                                      questions than requested.
+        Large requests are chunked to reduce output-token pressure and to
+        improve cache reuse across repeated calls.
         """
         logger.debug(
             "Generating %d '%s' questions for topic: %s",
@@ -156,49 +237,19 @@ class QuestionGenerator:
             topic,
         )
 
-        try:
-            chain = self._build_chain()
-            raw = chain.invoke({
-                "topic": topic,
-                "num_questions": num_questions,
-                "difficulty": difficulty,
-            })
-        except ChainCreationError:
-            raise
-        except Exception as exc:
-            raise QuestionsGenerationError(f"Ollama call failed: {exc}") from exc
+        chunk_size = max(1, min(settings.OPENAI_GENERATION_CHUNK_SIZE, num_questions))
+        results: List[str] = []
+        remaining = num_questions
 
-        content = raw.content if hasattr(raw, "content") else str(raw)
-
-        try:
-            cleaned = self._sanitize_json(content)
-            data = json.loads(cleaned)
-        except (ValueError, json.JSONDecodeError) as exc:
-            logger.error("Failed to parse questions JSON. Raw output (first 500 chars): %s", content[:500])
-            raise QuestionsGenerationError(
-                f"Invalid JSON from model. Original error: {exc}"
-            ) from exc
-
-        raw_list = data.get("questions", [])
-        if not isinstance(raw_list, list):
-            raise QuestionsGenerationError("'questions' field is not a list in model response.")
-
-        questions = self._normalize_questions(raw_list, num_questions)
-
-        if not questions:
-            raise QuestionsGenerationError("Model returned an empty questions list.")
-
-        if len(questions) < num_questions:
-            logger.warning(
-                "Expected %d questions but received %d for topic '%s'.",
-                num_questions,
-                len(questions),
-                topic,
+        while remaining > 0:
+            batch_size = min(chunk_size, remaining)
+            results.extend(
+                self._generate_batch(
+                    topic=topic,
+                    num_questions=batch_size,
+                    difficulty=difficulty,
+                )
             )
-            raise QuestionsGenerationError(
-                f"Expected {num_questions} questions but received only {len(questions)}. "
-                "Try reducing num_questions or simplifying the topic."
-            )
+            remaining -= batch_size
 
-        logger.debug("Generated %d questions for '%s'.", len(questions), topic)
-        return questions
+        return results[:num_questions]

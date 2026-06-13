@@ -18,7 +18,7 @@ _engine: RubricsEngine | None = None
 def _get_engine() -> RubricsEngine:
     global _engine
     if _engine is None:
-        _engine = RubricsEngine(model=app_state.ollama_model)
+        _engine = RubricsEngine(client=app_state.openai_client)
     return _engine
 
 

@@ -56,11 +56,44 @@ class RubricsGenerationError(ExamEchoAIError):
 
 
 
+# LLM transport / provider handling
+
+class LLMServiceError(ExamEchoAIError):
+    """Base class for OpenAI/provider failures with an HTTP mapping."""
+
+    status_code: int = 503
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class LLMAuthenticationError(LLMServiceError):
+    status_code = 401
+
+
+class LLMPermissionError(LLMServiceError):
+    status_code = 403
+
+
+class LLMRateLimitError(LLMServiceError):
+    status_code = 429
+
+
+class LLMTimeoutError(LLMServiceError):
+    status_code = 504
+
+
+class LLMTransientError(LLMServiceError):
+    status_code = 503
+
+
+class LLMResponseError(LLMServiceError):
+    status_code = 502
+
+
+
 # Model / Server Loading
 
 class ModelLoadError(ExamEchoAIError):
-    """Raised when a model (Whisper, Ollama, SentenceTransformer) fails to load."""
-
-
-class OllamaConnectionError(ExamEchoAIError):
-    """Raised when the Ollama server is unreachable or the model is not available."""
+    """Raised when a model or API client fails to initialize."""

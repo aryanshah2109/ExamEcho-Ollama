@@ -1,186 +1,89 @@
-# ExamEcho AI Service — Ollama Edition
+# ExamEcho AI Service
 
-AI microservice powering the ExamEcho examination platform.  
-All LLM inference runs **locally** via [Ollama](https://ollama.ai) using **mistral:7b** — no external API key required.
+AI microservice powering the ExamEcho examination platform.
+
+LLM inference now runs through the OpenAI API with structured outputs,
+persistent caching, and smaller model defaults to keep costs down.
 
 Provides REST endpoints for:
-- **STT** — Speech-to-Text (OpenAI Whisper, local)
-- **TTS** — Text-to-Speech (gTTS)
-- **Question Generation** — Topic/difficulty-based question generation (mistral:7b via Ollama)
-- **Rubric Generation** — Automatic marking criteria from question + marks (mistral:7b)
-- **Answer Evaluation** — Viva/long-answer scoring with feedback (mistral:7b)
-- **MCQ Evaluation** — Option matching via cosine similarity (SentenceTransformer, local)
-
-
----
+- STT - Speech-to-Text (OpenAI Whisper, local)
+- TTS - Text-to-Speech (gTTS)
+- Question Generation - topic/difficulty-based exam questions
+- Rubric Generation - marking criteria from question + marks
+- Answer Evaluation - viva/long-answer scoring with feedback
+- MCQ Evaluation - option matching via cosine similarity
 
 ## Prerequisites
 
-| Dependency | Version | Notes |
-|---|---|---|
-| Python | 3.10+ | 3.11 recommended |
-| Ollama | Latest | [Install from ollama.ai](https://ollama.ai) |
-| mistral:7b | — | Pull with `ollama pull mistral:7b` (~4 GB) |
-| ffmpeg | Any recent | Required for audio conversion (STT) |
+| Dependency | Notes |
+|---|---|
+| Python | 3.10+ recommended |
+| OpenAI API key | Required for all LLM endpoints |
+| ffmpeg | Required for audio conversion (STT) |
 
-### Install Ollama
-
-```bash
-# Linux / WSL
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# macOS
-brew install ollama
-
-# Windows
-# Download installer from https://ollama.ai/download
-```
-
-### Pull the model
+## Install
 
 ```bash
-ollama pull mistral:7b
-```
-
-> The first pull downloads ~4 GB. Subsequent starts are instant.
-
-### Start Ollama
-
-```bash
-ollama serve
-# Runs on http://localhost:11434 by default
-```
-
-### Install ffmpeg
-
-```bash
-# Ubuntu / Debian
-sudo apt-get install ffmpeg
-
-# macOS (Homebrew)
-brew install ffmpeg
-
-# Windows
-# Download from https://ffmpeg.org/download.html and add to PATH
-```
-
----
-
-## Quick Start (Local)
-
-```bash
-# 1. Clone / extract the project
-cd examecho_ai
-
-# 2. Create virtual environment
 python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-.venv\Scripts\activate           # Windows
-
-# 3. Install dependencies
+.venv\Scripts\activate
 pip install -r requirements.txt
-
-# 4. Copy and review environment config
-cp .env.example .env
-# Default values work if Ollama is running on localhost:11434
-
-# 5. Ensure Ollama is running and model is pulled
-ollama serve &          # (skip if already running as a service)
-ollama pull mistral:7b  # (skip if already pulled)
-
-# 6. Start the service
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
-The service will:
-1. Probe Ollama at startup and verify `mistral:7b` is available.
-2. Load Whisper and SentenceTransformer into memory.
-3. Serve API docs at **http://localhost:8000/docs** (Swagger UI).
-4. Serve ReDoc at **http://localhost:8000/redoc**.
-
-### HuggingFace STT backend (optional)
-
-If you want to use the `hf` STT backend:
-
-```bash
-pip install transformers torch
-```
-
----
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and adjust as needed.
+Copy your environment file and set the OpenAI values:
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_MODEL_NAME` | `mistral:7b` | Model to use for all LLM tasks |
-| `OLLAMA_TEMPERATURE` | `0.0` | Output randomness (0 = deterministic) |
-| `OLLAMA_MAX_TOKENS` | `2048` | Max tokens per LLM response |
+| `OPENAI_API_KEY` | empty | OpenAI API key |
+| `OPENAI_MODEL_QUESTION` | `gpt-5.4-nano` | Model for question generation |
+| `OPENAI_MODEL_RUBRIC` | `gpt-5.4-nano` | Model for rubric generation |
+| `OPENAI_MODEL_EVAL` | `gpt-5.4-mini` | Model for answer evaluation |
+| `OPENAI_MODEL_MCQ` | `gpt-5.4-nano` | Model for MCQ generation |
+| `OPENAI_TEMPERATURE` | `0.0` | Deterministic output |
+| `OPENAI_MAX_OUTPUT_TOKENS_*` | task-specific | Per-task output limits |
+| `OPENAI_MAX_RETRIES` | `1` | Keep retries low to control spend |
+| `OPENAI_GENERATION_CHUNK_SIZE` | `10` | Splits large generation requests into smaller calls |
+| `OPENAI_TOPIC_BATCH_SIZE` | `4` | Batches multiple topics into one paid request when possible |
+| `LLM_CACHE_ENABLED` | `true` | Enables persistent structured-response caching |
+| `LLM_CACHE_BACKEND` | `redis` | `redis` or `sqlite` |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis cache endpoint |
+| `REDIS_CACHE_PREFIX` | `examecho:llm:` | Key prefix for Redis cache entries |
+| `REDIS_CONNECT_RETRIES` | `3` | Redis connection retries at startup |
+| `REDIS_CONNECT_BACKOFF_SECONDS` | `0.5` | Backoff between Redis connection retries |
+| `REDIS_CONNECT_TIMEOUT_SECONDS` | `2.0` | Redis socket timeout |
+| `LLM_CACHE_PATH` | `.cache/llm_cache.sqlite3` | SQLite cache location |
+| `LLM_CACHE_TTL_SECONDS` | `604800` | Cache retention window |
 | `WHISPER_MODEL_SIZE` | `base` | `tiny` \| `base` \| `small` \| `medium` \| `large` |
 | `STT_DEFAULT_MODEL` | `whisper` | `whisper` \| `hf` |
 | `MCQ_EVAL_MODEL_NAME` | `sentence-transformers/all-MiniLM-L6-v2` | SentenceTransformer model |
-| `MCQ_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold for correct MCQ |
+| `MCQ_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold |
 | `TTS_AUDIO_DIR` | `generated_audio` | Directory for temp MP3 files |
 | `CORS_ORIGINS` | `["*"]` | Allowed CORS origins |
 | `API_V1_PREFIX` | `/api/v1` | API route prefix |
 
----
-
-## Running with Docker Compose (Recommended)
-
-The included `docker-compose.yml` starts **both** the Ollama server and the ExamEcho AI service:
+## Run Locally
 
 ```bash
-# 1. Start all services
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The service will:
+1. Load Whisper and SentenceTransformer locally.
+2. Initialize the OpenAI client from environment variables.
+3. Create or reuse the local SQLite cache for structured LLM responses.
+4. Serve API docs at `http://localhost:8000/docs`.
+
+## Run with Docker
+
+```bash
 docker compose up -d
-
-# 2. Pull the model inside the Ollama container (first time only, ~4 GB)
-docker compose exec ollama ollama pull mistral:7b
-
-# 3. Check readiness
-curl http://localhost:8000/health
-
-# 4. Open API docs
-open http://localhost:8000/docs
 ```
 
-### GPU support (Nvidia)
+The compose stack starts both the app and a Redis cache. Make sure
+`OPENAI_API_KEY` is set in your shell or `.env` before starting the stack.
 
-Uncomment the `deploy.resources` block in `docker-compose.yml` to enable GPU
-acceleration (requires `nvidia-container-toolkit`).
-
----
-
-## Running with Docker (manual)
-
-```bash
-# 1. Start Ollama container
-docker run -d \
-  --name ollama \
-  -p 11434:11434 \
-  -v ollama_data:/root/.ollama \
-  ollama/ollama
-
-# 2. Pull the model
-docker exec ollama ollama pull mistral:7b
-
-# 3. Build the ExamEcho image
-docker build -t examecho-ai .
-
-# 4. Run the service (connected to the Ollama container)
-docker run -d \
-  --name examecho-ai \
-  -p 8000:8000 \
-  --link ollama:ollama \
-  -e OLLAMA_BASE_URL=http://ollama:11434 \
-  examecho-ai
-```
-
----
-
-## Health Checks
+## Health
 
 ### General health
 
@@ -188,301 +91,78 @@ docker run -d \
 curl http://localhost:8000/health
 ```
 
+Example response:
+
 ```json
 {
   "status": "ok",
   "version": "2.0.0",
   "backend": {
-    "llm": "ollama",
-    "model": "mistral:7b",
-    "ollama_url": "http://localhost:11434"
+    "llm": "openai",
+    "question_model": "gpt-5.4-nano",
+    "rubric_model": "gpt-5.4-nano",
+    "evaluation_model": "gpt-5.4-mini",
+    "mcq_model": "gpt-5.4-nano",
+    "cache_enabled": true,
+    "cache_backend": "redis",
+    "cache_path": ".cache/llm_cache.sqlite3"
   },
   "models": {
     "whisper": true,
-    "ollama": true,
+    "openai": true,
     "sentence_transformer": true
   }
 }
 ```
 
-### Ollama connectivity check
+### OpenAI backend configuration
 
 ```bash
-curl http://localhost:8000/health/ollama
+curl http://localhost:8000/health/openai
 ```
 
-```json
-{
-  "ollama_url": "http://localhost:11434",
-  "model": "mistral:7b",
-  "server_reachable": true,
-  "model_available": true,
-  "error": null
-}
-```
+This endpoint reports whether the OpenAI client was initialized and whether
+the API key is configured, without making a paid network call.
 
----
+### Redis cache health
 
-## API Reference
-
-All endpoints are prefixed with `/api/v1`.  
-Full interactive documentation is available at **http://localhost:8000/docs**.
-
----
-
-### Speech-to-Text
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/stt/transcribe` | Transcribe uploaded audio to text |
-
-**Form params:** `audio` (file), `lang` (default `"en"`), `model` (default `"whisper"`)
-
-**Accepted audio types:** `audio/wav`, `audio/x-wav`, `audio/mpeg`, `audio/mp4`, `audio/webm`, `audio/ogg`
-
-**Example:**
 ```bash
-curl -X POST http://localhost:8000/api/v1/stt/transcribe \
-  -F "audio=@answer.webm" \
-  -F "lang=en"
+curl http://localhost:8000/health/redis
 ```
 
-**Response:**
-```json
-{ "text": "A binary search tree is a tree where...", "language": "en", "model": "whisper" }
-```
+This endpoint reports whether Redis is reachable and whether the service
+is using Redis or the SQLite fallback.
 
----
+## Cost Control
 
-### Text-to-Speech
+The implementation uses several cost-saving measures:
+- Structured outputs to reduce malformed JSON retries
+- Small default models for generation tasks
+- Slightly stronger model only for answer evaluation
+- Redis caching for cross-worker identical-request deduplication
+- Chunked generation for large question/MCQ requests
+- Low retry count to avoid duplicate paid requests
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/tts/synthesize` | Convert text to MP3 audio |
+For offline or back-office bulk generation, prefer the OpenAI Batch API.
+It is a better fit when you do not need immediate responses.
 
-**Request body:**
-```json
-{
-  "question_id": "q_001",
-  "text": "What is polymorphism?",
-  "language": "en",
-  "slow": false
-}
-```
+## Project Layout
 
-**Response:** MP3 audio file (binary stream).
-
----
-
-### Question Generation
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/questions/generate` | Generate questions for one or more topics |
-
-**Request body:**
-```json
-{
-  "topics": ["Binary Trees", "Sorting Algorithms"],
-  "num_questions": 5,
-  "difficulty": "medium"
-}
-```
-
-**Response:**
-```json
-{
-  "topics": {
-    "Binary Trees": {
-      "1": "What is a binary search tree?",
-      "2": "Explain the difference between pre-order and in-order traversal."
-    }
-  }
-}
-```
-
-> **Note:** `mistral:7b` is slower than a cloud API. Expect ~5–15 s per topic on CPU,
-> ~2–5 s with a GPU.
-
----
-
-### Rubric Generation
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/rubrics/create` | Generate marking criteria for a question |
-
-**Request body:**
-```json
-{
-  "question_id": "q_001",
-  "question_text": "Explain the difference between stack and queue.",
-  "max_marks": 10
-}
-```
-
-**Response:**
-```json
-{
-  "question_id": "q_001",
-  "question_text": "Explain the difference between stack and queue.",
-  "rubrics": [
-    "Correctly defines stack as LIFO (Last In, First Out).",
-    "Correctly defines queue as FIFO (First In, First Out).",
-    "Identifies at least one real-world use case for each structure.",
-    "Describes the key operations (push/pop for stack, enqueue/dequeue for queue)."
-  ]
-}
-```
-
----
-
-### Answer Evaluation
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/evaluate/answer` | Evaluate a viva / long-form answer |
-
-**Request body:**
-```json
-{
-  "question_id": "q_001",
-  "question_text": "What is a binary search tree?",
-  "student_answer": "A BST is a tree where each node has at most two children and left child is smaller...",
-  "rubric": ["Correct definition", "Mention of ordering property", "Example given"],
-  "max_marks": 10
-}
-```
-
-**Response:**
-```json
-{
-  "question_id": "q_001",
-  "score": 7,
-  "strengths": ["Correct definition of BST", "Mentioned ordering property"],
-  "weakness": ["No concrete example provided"],
-  "justification": "The student demonstrated understanding of BST structure but lacked an example.",
-  "suggested_improvement": "Include a concrete example diagram or walkthrough of BST insertion."
-}
-```
-
----
-
-### MCQ Evaluation
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/mcq/evaluate` | Evaluate a multiple-choice answer |
-
-**Request body:**
-```json
-{
-  "question_id": "q_002",
-  "selected_option": "option b",
-  "correct_option": "option b"
-}
-```
-
-**Response:**
-```json
-{
-  "question_id": "q_002",
-  "similarity_score": 1.0,
-  "inference": "Correct Answer"
-}
-```
-
----
-
-## Troubleshooting
-
-### Ollama server not reachable
-
-```
-OllamaConnectionError: Cannot connect to Ollama at 'http://localhost:11434'.
-Make sure Ollama is running:  ollama serve
-```
-
-**Fix:** Start Ollama with `ollama serve` or check it is installed.
-
----
-
-### Model not found
-
-```
-ModelLoadError: Ollama model 'mistral:7b' is not available locally.
-Pull the model first:  ollama pull mistral:7b
-```
-
-**Fix:** Run `ollama pull mistral:7b`. The download is ~4 GB.
-
----
-
-### Slow responses
-
-mistral:7b on CPU generates ~15–30 tokens/second, which means a 5-question
-generation request takes ~30–60 seconds.  To speed this up:
-
-- Use a GPU machine and set `OLLAMA_NUM_GPU=1` in your environment.
-- Use a smaller model: change `OLLAMA_MODEL_NAME=mistral:7b-instruct-q4_K_M`.
-- Run Ollama on a machine with ≥ 8 GB RAM for CPU inference.
-
----
-
-### JSON parse errors from the LLM
-
-mistral:7b occasionally adds prose preambles before the JSON.  The service
-includes a robust JSON extractor (`app/utils/json_utils.py`) that strips
-markdown fences and repairs common issues.  If errors persist:
-
-- Lower `OLLAMA_TEMPERATURE` to `0.0` (already the default).
-- Check the server logs for the raw model output.
-
----
-
-## Project Structure
-
-```
-examecho_ai/
-├── ai_ml/                         # Pure AI/ML logic (no FastAPI dependencies)
-│   ├── exceptions.py              # All custom exceptions (incl. OllamaConnectionError)
-│   ├── model_creator.py           # Singleton loaders: WhisperModelLoader, OllamaModelLoader
-│   ├── audio_preprocessor.py      # ffmpeg conversion + VAD silence trimming
-│   ├── stt.py                     # Speech-to-Text (Whisper / HF)
-│   ├── tts.py                     # Text-to-Speech (gTTS pipeline)
-│   ├── evaluation.py              # Viva answer evaluation (mistral:7b)
-│   ├── rubrics.py                 # Rubric generation (mistral:7b)
-│   ├── question_generator.py      # Exam question generation (mistral:7b)
-│   └── mcq_evaluation.py          # MCQ semantic similarity evaluation
-│
+```text
+.
+├── ai_ml/
+│   ├── evaluation.py
+│   ├── mcq_generator.py
+│   ├── model_creator.py
+│   ├── openai_llm.py
+│   ├── question_generator.py
+│   └── rubrics.py
 ├── app/
-│   ├── config.py                  # All settings (env-driven via pydantic-settings)
-│   ├── core/
-│   │   └── state.py               # Global app state (ollama_model, whisper_model, st_model)
-│   ├── routers/                   # FastAPI route handlers
-│   ├── schemas/                   # Pydantic request/response models
-│   ├── services/                  # Business logic bridging routers ↔ ai_ml
-│   └── utils/
-│       └── json_utils.py          # Shared LLM JSON extraction/repair
-│
-├── main.py                        # FastAPI app, lifespan, router registration
-├── requirements.txt
-├── .env.example
+│   ├── config.py
+│   ├── core/state.py
+│   ├── services/
+│   └── utils/llm_cache.py
+├── docker-compose.yml
 ├── Dockerfile
-├── docker-compose.yml             # Runs Ollama + ExamEcho AI together
-└── README.md
+└── main.py
 ```
-
----
-
-## Performance Notes
-
-| Resource | Minimum | Recommended |
-|---|---|---|
-| RAM | 8 GB | 16 GB |
-| CPU | 4 cores | 8+ cores |
-| GPU | None (CPU inference) | Nvidia GPU with 6 GB+ VRAM |
-| Disk | 10 GB free | 20 GB free |
-
-CPU inference is usable but slow (~30–60 s per LLM request).  
-GPU inference brings this down to ~2–5 s per request.

@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from ai_ml.exceptions import LLMServiceError
 from app.schemas.mcq_generation import MCQGenerationRequest, MCQGenerationResponse
 from app.services.mcq_generation_service import generate_mcqs
 
@@ -35,6 +36,9 @@ async def generate_mcqs_endpoint(payload: MCQGenerationRequest) -> MCQGeneration
     """
     try:
         result = await generate_mcqs(payload)
+    except LLMServiceError as exc:
+        logger.error("OpenAI provider error during MCQ generation: %s", exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception:
         logger.exception("Unexpected error during MCQ generation")
         raise HTTPException(status_code=500, detail="MCQ generation failed due to an internal error.")

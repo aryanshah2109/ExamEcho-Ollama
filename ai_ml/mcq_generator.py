@@ -1,125 +1,217 @@
 """
 MCQ generation engine for ExamEcho.
 
-Generates Multiple Choice Questions for a given topic and difficulty
-using a local Ollama model (mistral:7b).
+Uses OpenAI structured outputs to produce multiple-choice questions with
+validated answer options and persistent caching.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-from typing import List, Dict, Any
+from collections.abc import Sequence
+from typing import Any, Dict, List
 
-from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
+from pydantic import BaseModel, Field, field_validator
 
-from ai_ml.exceptions import ChainCreationError, QuestionsGenerationError
-from ai_ml.model_creator import OllamaModelLoader
+from ai_ml.exceptions import LLMServiceError, QuestionsGenerationError
+from ai_ml.openai_llm import OpenAIStructuredCaller
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-_MCQ_TEMPLATE = """\
-[INST]
-You are an academic exam question setter. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
+class _MCQItem(BaseModel):
+    question: str = Field(min_length=1)
+    options: List[str] = Field(min_length=4, max_length=4)
+    correct_option: str = Field(min_length=1)
 
-Rules:
-- Generate EXACTLY {num_questions} MCQs for the TOPIC below.
-- Each question must have exactly 4 options prefixed with A:, B:, C:, D:.
-- Exactly one option must be correct.
-- correct_option must be the exact full string of the correct option (e.g. "A: some text").
-- NO code, NO programs, NO algorithms unless the topic demands it.
-- Stay strictly within the TOPIC.
-- Difficulty guidelines:
-  EASY   : definitions, meanings, purposes
-  MEDIUM : explanations, reasoning, simple examples
-  HARD   : critical thinking, limitations, trade-offs, applications
+    @field_validator("options", mode="before")
+    @classmethod
+    def _clean_options(cls, value) -> List[str]:
+        if not isinstance(value, list):
+            raise ValueError("options must be a list")
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if len(cleaned) != 4:
+            raise ValueError("options must contain exactly four non-empty items")
+        return cleaned
 
-TOPIC: {topic}
-DIFFICULTY: {difficulty}
+    @field_validator("correct_option", mode="after")
+    @classmethod
+    def _validate_correct_option(cls, value: str) -> str:
+        return value.strip()
 
-Respond with ONLY this JSON:
-{{"topic":"{topic}","mcqs":[{{"question":"<question text>","options":["A: <option>","B: <option>","C: <option>","D: <option>"],"correct_option":"A: <option>"}}]}}
-[/INST]"""
+
+class _MCQBatch(BaseModel):
+    topic: str = Field(min_length=1)
+    mcqs: List[_MCQItem] = Field(min_length=1)
+
+    @field_validator("mcqs", mode="before")
+    @classmethod
+    def _ensure_mcqs(cls, value) -> List[dict]:
+        if not isinstance(value, list):
+            raise ValueError("mcqs must be a list")
+        return value
+
+
+class _MCQTopicItem(BaseModel):
+    topic: str = Field(min_length=1)
+    mcqs: List[_MCQItem] = Field(min_length=1)
+
+    @field_validator("mcqs", mode="before")
+    @classmethod
+    def _ensure_mcqs(cls, value) -> List[dict]:
+        if not isinstance(value, list):
+            raise ValueError("mcqs must be a list")
+        return value
+
+
+class _MCQTopicBatch(BaseModel):
+    topics: List[_MCQTopicItem] = Field(min_length=1)
+
+    @field_validator("topics", mode="before")
+    @classmethod
+    def _ensure_topics(cls, value) -> List[dict]:
+        if not isinstance(value, list):
+            raise ValueError("topics must be a list")
+        return value
+
+
+_SYSTEM_PROMPT = (
+    "You are an academic exam setter. "
+    "Generate polished MCQs and return only structured data."
+)
+
+_PROMPT_VERSION = "openai-mcq-v1"
+
 
 class MCQGenerator:
-    """
-    Generates MCQ exam questions using a local Ollama model.
+    """Generates MCQ exam questions using OpenAI."""
 
-    Args:
-        model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
-    """
+    def __init__(self, client=None) -> None:
+        self._caller = OpenAIStructuredCaller(client=client)
 
-    def __init__(self, model=None) -> None:
-        self._model = model
+    def _generate_batch(
+        self,
+        *,
+        topic: str,
+        num_questions: int,
+        difficulty: str,
+    ) -> List[Dict[str, Any]]:
+        user_prompt = (
+            f"Topic: {topic}\n"
+            f"Difficulty: {difficulty}\n"
+            f"Task: Generate exactly {num_questions} MCQs.\n"
+            "Constraints:\n"
+            "- Each MCQ must have exactly four options.\n"
+            "- Options must be prefixed with A:, B:, C:, and D:.\n"
+            "- Exactly one option must be correct.\n"
+            "- correct_option must match the exact string of one of the options.\n"
+            "- Avoid code/programs/algorithms unless the topic strictly requires them.\n"
+            "- Stay strictly within the topic.\n"
+            "- Do not include numbering, markdown, explanations, or extra keys."
+        )
 
-    def _get_model(self):
-        if self._model is None:
-            self._model = OllamaModelLoader.get_model()
-        return self._model
-
-    def _build_chain(self):
         try:
-            prompt = PromptTemplate(
-                template=_MCQ_TEMPLATE,
-                input_variables=["num_questions", "topic", "difficulty"],
+            result = self._caller.parse(
+                cache_namespace="mcq_generation",
+                model=settings.OPENAI_MODEL_MCQ,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=_MCQBatch,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_MCQ,
+                cache_inputs={
+                    "topic": topic,
+                    "num_questions": num_questions,
+                    "difficulty": difficulty,
+                    "prompt_version": _PROMPT_VERSION,
+                },
             )
-            model = ChatOllama(
-                base_url=settings.OLLAMA_BASE_URL,
-                model=settings.OLLAMA_MODEL_NAME,
-                temperature=settings.OLLAMA_TEMPERATURE,
-                num_ctx=settings.OLLAMA_NUM_CTX,
-                options={
-                    "num_predict": settings.OLLAMA_MAX_TOKENS_RUBRICS
-                }
-            )
-            return prompt | model
+        except LLMServiceError:
+            raise
         except Exception as exc:
-            raise ChainCreationError(
-                f"Could not build MCQ generation chain: {exc}"
-            ) from exc
+            raise QuestionsGenerationError(f"OpenAI call failed: {exc}") from exc
 
-    @staticmethod
-    def _sanitize_json(text: str) -> str:
-        """
-        Strip markdown fences, [INST]/[/INST] tags, and extract the first
-        valid JSON object from raw model output.
-        """
-        text = re.sub(r"\[/?INST\]", "", text)
-        text = re.sub(r"```(?:json)?", "", text)
-        text = text.replace("```", "").strip()
+        normalized = self._normalize_mcqs(result.mcqs, num_questions)
+        if len(normalized) < num_questions:
+            raise QuestionsGenerationError(
+                f"Expected {num_questions} MCQs but received only {len(normalized)}."
+            )
+        return normalized
 
-        decoder = json.JSONDecoder()
-        for i, ch in enumerate(text):
-            if ch == "{":
-                try:
-                    obj, _ = decoder.raw_decode(text[i:])
-                    return json.dumps(obj)
-                except json.JSONDecodeError:
-                    continue
-        raise ValueError("No valid JSON object found in model output.")
+    def _generate_multi_topic_batch(
+        self,
+        *,
+        topics: Sequence[str],
+        num_questions: int,
+        difficulty: str,
+    ) -> dict[str, List[Dict[str, Any]]]:
+        topic_list = [str(topic).strip() for topic in topics if str(topic).strip()]
+        if not topic_list:
+            return {}
+
+        user_prompt = (
+            f"Topics: {', '.join(topic_list)}\n"
+            f"Difficulty: {difficulty}\n"
+            f"Task: For each topic, generate exactly {num_questions} MCQs.\n"
+            "Constraints:\n"
+            "- Each MCQ must have exactly four options.\n"
+            "- Options must be prefixed with A:, B:, C:, and D:.\n"
+            "- Exactly one option must be correct.\n"
+            "- correct_option must match the exact string of one of the options.\n"
+            "- Avoid code/programs/algorithms unless the topic strictly requires them.\n"
+            "- Stay strictly within each topic.\n"
+            "- Do not include numbering, markdown, explanations, or extra keys.\n"
+            "- Return one entry per topic."
+        )
+
+        try:
+            result = self._caller.parse(
+                cache_namespace="mcq_generation_multi",
+                model=settings.OPENAI_MODEL_MCQ,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=_MCQTopicBatch,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_MCQ,
+                cache_inputs={
+                    "topics": topic_list,
+                    "num_questions": num_questions,
+                    "difficulty": difficulty,
+                    "prompt_version": _PROMPT_VERSION,
+                },
+            )
+        except LLMServiceError:
+            raise
+        except Exception as exc:
+            raise QuestionsGenerationError(f"OpenAI batch call failed: {exc}") from exc
+
+        mapped: dict[str, List[Dict[str, Any]]] = {}
+        for item in result.topics:
+            mcqs = self._normalize_mcqs(item.mcqs, num_questions)
+            if mcqs:
+                mapped[item.topic] = mcqs
+        return mapped
 
     @staticmethod
     def _normalize_mcqs(raw_mcqs: list, num_questions: int) -> List[Dict[str, Any]]:
-        """Validate and normalize the generated MCQs."""
         normalized = []
         for mcq in raw_mcqs:
+            if hasattr(mcq, "model_dump"):
+                mcq = mcq.model_dump()
             if not isinstance(mcq, dict):
                 continue
-            
-            question = mcq.get("question", "").strip()
+
+            question = str(mcq.get("question", "")).strip()
             options = mcq.get("options", [])
-            correct_option = mcq.get("correct_option", "").strip()
+            correct_option = str(mcq.get("correct_option", "")).strip()
 
             if not question or not isinstance(options, list) or len(options) != 4 or not correct_option:
                 continue
-                
-            # Basic validation to ensure correct option is in the options list
+
+            options = [str(opt).strip() for opt in options if str(opt).strip()]
+            if len(options) != 4:
+                continue
+
             if correct_option not in options:
-                # Attempt to find it if it was stripped
                 found = False
                 for opt in options:
                     if correct_option in opt or opt in correct_option:
@@ -129,31 +221,17 @@ class MCQGenerator:
                 if not found:
                     continue
 
-            normalized.append({
-                "question": question,
-                "options": [str(opt).strip() for opt in options],
-                "correct_option": correct_option
-            })
+            normalized.append(
+                {
+                    "question": question,
+                    "options": options,
+                    "correct_option": correct_option,
+                }
+            )
 
         return normalized[:num_questions]
 
     def generate(self, *, topic: str, num_questions: int, difficulty: str) -> List[Dict[str, Any]]:
-        """
-        Generate MCQ questions for a topic.
-
-        Args:
-            topic:         Subject topic.
-            num_questions: Number of questions to generate.
-            difficulty:    One of "easy", "medium", "hard".
-
-        Returns:
-            List of dictionaries representing the MCQs.
-
-        Raises:
-            ChainCreationError:      If the LangChain chain cannot be built.
-            QuestionsGenerationError: If generation fails or returns fewer
-                                      questions than requested.
-        """
         logger.debug(
             "Generating %d '%s' MCQs for topic: %s",
             num_questions,
@@ -161,49 +239,44 @@ class MCQGenerator:
             topic,
         )
 
-        try:
-            chain = self._build_chain()
-            raw = chain.invoke({
-                "topic": topic,
-                "num_questions": num_questions,
-                "difficulty": difficulty,
-            })
-        except ChainCreationError:
-            raise
-        except Exception as exc:
-            raise QuestionsGenerationError(f"Ollama call failed: {exc}") from exc
+        chunk_size = max(1, min(settings.OPENAI_GENERATION_CHUNK_SIZE, num_questions))
+        results: List[Dict[str, Any]] = []
+        remaining = num_questions
 
-        content = raw.content if hasattr(raw, "content") else str(raw)
-
-        try:
-            cleaned = self._sanitize_json(content)
-            data = json.loads(cleaned)
-        except (ValueError, json.JSONDecodeError) as exc:
-            logger.error("Failed to parse MCQs JSON. Raw output (first 500 chars): %s", content[:500])
-            raise QuestionsGenerationError(
-                f"Invalid JSON from model. Original error: {exc}"
-            ) from exc
-
-        raw_list = data.get("mcqs", [])
-        if not isinstance(raw_list, list):
-            raise QuestionsGenerationError("'mcqs' field is not a list in model response.")
-
-        mcqs = self._normalize_mcqs(raw_list, num_questions)
-
-        if not mcqs:
-            raise QuestionsGenerationError("Model returned an empty or invalid MCQs list.")
-
-        if len(mcqs) < num_questions:
-            logger.warning(
-                "Expected %d MCQs but received %d for topic '%s'.",
-                num_questions,
-                len(mcqs),
-                topic,
+        while remaining > 0:
+            batch_size = min(chunk_size, remaining)
+            results.extend(
+                self._generate_batch(
+                    topic=topic,
+                    num_questions=batch_size,
+                    difficulty=difficulty,
+                )
             )
-            raise QuestionsGenerationError(
-                f"Expected {num_questions} MCQs but received only {len(mcqs)}. "
-                "Try reducing num_questions or simplifying the topic."
-            )
+            remaining -= batch_size
 
-        logger.debug("Generated %d MCQs for '%s'.", len(mcqs), topic)
-        return mcqs
+        return results[:num_questions]
+
+    def generate_many(
+        self,
+        *,
+        topics: Sequence[str],
+        num_questions: int,
+        difficulty: str,
+    ) -> dict[str, List[Dict[str, Any]]]:
+        """
+        Generate MCQs for multiple topics using batched requests.
+        """
+        results: dict[str, List[Dict[str, Any]]] = {}
+        batch_size = max(1, settings.OPENAI_TOPIC_BATCH_SIZE)
+        topic_list = [str(topic).strip() for topic in topics if str(topic).strip()]
+
+        for start in range(0, len(topic_list), batch_size):
+            batch = topic_list[start:start + batch_size]
+            batch_result = self._generate_multi_topic_batch(
+                topics=batch,
+                num_questions=num_questions,
+                difficulty=difficulty,
+            )
+            results.update(batch_result)
+
+        return results

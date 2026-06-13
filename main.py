@@ -1,13 +1,12 @@
 """
-ExamEcho AI Service — FastAPI application entrypoint (Ollama edition).
+ExamEcho AI Service — FastAPI application entrypoint (OpenAI edition).
 
 Start the server:
     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 Prerequisites:
-    1. Ollama must be running:   ollama serve
-    2. Model must be pulled:     ollama pull mistral:7b
-    3. ffmpeg must be on PATH for audio conversion (STT)
+    1. OpenAI API key must be configured in the environment.
+    2. ffmpeg must be on PATH for audio conversion (STT)
 
 API docs available at:
     http://localhost:8000/docs      (Swagger UI)
@@ -43,16 +42,19 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan handler.
 
-    Loads Whisper, Ollama (mistral:7b), and SentenceTransformer into
-    ``app_state`` on startup so every request reuses already-loaded models.
+    Loads Whisper, OpenAI client, and SentenceTransformer into
+    ``app_state`` on startup so every request reuses already-loaded clients/models.
 
     Startup failures are logged but do not abort the server — individual
     endpoints will return 503 if their required model is not ready.
     """
     logger.info("=" * 60)
-    logger.info("Starting ExamEcho AI Service (Ollama edition) …")
-    logger.info("  Ollama URL:   %s", settings.OLLAMA_BASE_URL)
-    logger.info("  Ollama model: %s", settings.OLLAMA_MODEL_NAME)
+    logger.info("Starting ExamEcho AI Service (OpenAI edition) …")
+    logger.info("  OpenAI models: question=%s rubric=%s eval=%s mcq=%s",
+                settings.OPENAI_MODEL_QUESTION,
+                settings.OPENAI_MODEL_RUBRIC,
+                settings.OPENAI_MODEL_EVAL,
+                settings.OPENAI_MODEL_MCQ)
     logger.info("  Whisper size: %s", settings.WHISPER_MODEL_SIZE)
     logger.info("=" * 60)
 
@@ -65,22 +67,29 @@ async def lifespan(app: FastAPI):
         logger.error("✗ Whisper model failed to load: %s", exc)
         logger.warning("  STT endpoints will not be functional.")
 
-    # Ollama LLM
+    # OpenAI LLM
     try:
-        from ai_ml.model_creator import OllamaModelLoader
-        app_state.ollama_model = OllamaModelLoader.get_model()
-        logger.info("✓ Ollama model '%s' ready", settings.OLLAMA_MODEL_NAME)
+        from ai_ml.model_creator import OpenAIClientLoader
+        app_state.openai_client = OpenAIClientLoader.get_client()
+        logger.info("✓ OpenAI client ready")
     except Exception as exc:
-        logger.error("✗ Ollama model failed to load: %s", exc)
+        logger.error("✗ OpenAI client failed to initialise: %s", exc)
 
-    # Warmup
-    if app_state.ollama_model is not None:
-        try:
-            logger.info("Warming up Ollama model...")
-            app_state.ollama_model.invoke("ping")
-            logger.info("✓ Ollama warmup complete")
-        except Exception as exc:
-            logger.warning("Warmup call failed (non-fatal): %s", exc)
+    # LLM cache backend
+    try:
+        from app.utils.llm_cache import build_llm_cache_healthcheck
+        cache_health = build_llm_cache_healthcheck(strict_redis=False)
+        logger.info(
+            "✓ LLM cache backend ready (%s, reachable=%s)",
+            cache_health.get("backend"),
+            cache_health.get("reachable"),
+        )
+        if cache_health.get("backend") == "sqlite":
+            logger.info("  Using SQLite cache fallback at %s", cache_health.get("path"))
+        elif not cache_health.get("reachable"):
+            logger.warning("  Redis cache is not reachable; using fallback behavior where applicable.")
+    except Exception as exc:
+        logger.error("✗ LLM cache backend failed to initialise: %s", exc)
 
     # SentenceTransformer (MCQ evaluation)
     try:
@@ -100,7 +109,7 @@ async def lifespan(app: FastAPI):
         if app_state.stt_ready:
             ready.append("STT")
         if app_state.llm_ready:
-            ready.append("LLM (question gen / eval / rubrics)")
+            ready.append("LLM (question gen / eval / rubrics / MCQ)")
         if app_state.mcq_ready:
             ready.append("MCQ evaluation")
         logger.warning(
@@ -182,57 +191,64 @@ def health_check() -> dict:
         "status": "ok" if app_state.is_ready else "degraded",
         "version": settings.APP_VERSION,
         "backend": {
-            "llm": "ollama",
-            "model": settings.OLLAMA_MODEL_NAME,
-            "ollama_url": settings.OLLAMA_BASE_URL,
+            "llm": "openai",
+            "question_model": settings.OPENAI_MODEL_QUESTION,
+            "rubric_model": settings.OPENAI_MODEL_RUBRIC,
+            "evaluation_model": settings.OPENAI_MODEL_EVAL,
+            "mcq_model": settings.OPENAI_MODEL_MCQ,
+            "cache_enabled": settings.LLM_CACHE_ENABLED,
+            "cache_backend": settings.LLM_CACHE_BACKEND,
+            "cache_path": settings.LLM_CACHE_PATH,
         },
         "models": {
             "whisper": app_state.stt_ready,
-            "ollama": app_state.llm_ready,
+            "openai": app_state.llm_ready,
             "sentence_transformer": app_state.mcq_ready,
         },
     }
 
 
 @app.get(
-    "/health/ollama",
+    "/health/openai",
     tags=["Health"],
-    summary="Ollama server connectivity check",
+    summary="OpenAI backend configuration check",
     description=(
-        "Probes the Ollama server directly and returns its status and "
-        "whether the configured model is available locally."
+        "Returns the configured OpenAI backend model names and whether the "
+        "client has been initialised."
     ),
 )
-def health_ollama() -> dict:
+def health_openai() -> dict:
     """
-    Live probe of the Ollama server.
-
-    Unlike the main ``/health`` endpoint (which reflects startup state),
-    this endpoint queries Ollama on every call.  Useful for debugging
-    connectivity issues without restarting the service.
+    Report the configured OpenAI backend without making a paid API call.
     """
-    from ai_ml.model_creator import check_ollama_server, check_ollama_model
-    from ai_ml.exceptions import OllamaConnectionError, ModelLoadError
-
     result: dict = {
-        "ollama_url": settings.OLLAMA_BASE_URL,
-        "model": settings.OLLAMA_MODEL_NAME,
-        "server_reachable": False,
-        "model_available": False,
+        "client_initialized": app_state.llm_ready,
+        "api_key_configured": bool(settings.OPENAI_API_KEY),
+        "question_model": settings.OPENAI_MODEL_QUESTION,
+        "rubric_model": settings.OPENAI_MODEL_RUBRIC,
+        "evaluation_model": settings.OPENAI_MODEL_EVAL,
+        "mcq_model": settings.OPENAI_MODEL_MCQ,
+        "cache_enabled": settings.LLM_CACHE_ENABLED,
+        "cache_backend": settings.LLM_CACHE_BACKEND,
+        "cache_path": settings.LLM_CACHE_PATH,
         "error": None,
     }
-
-    try:
-        check_ollama_server(settings.OLLAMA_BASE_URL)
-        result["server_reachable"] = True
-    except OllamaConnectionError as exc:
-        result["error"] = str(exc)
-        return result
-
-    try:
-        check_ollama_model(settings.OLLAMA_MODEL_NAME, settings.OLLAMA_BASE_URL)
-        result["model_available"] = True
-    except ModelLoadError as exc:
-        result["error"] = str(exc)
-
     return result
+
+
+@app.get(
+    "/health/redis",
+    tags=["Health"],
+    summary="Redis cache health check",
+    description=(
+        "Returns Redis cache reachability and falls back details if Redis is "
+        "not configured or not reachable."
+    ),
+)
+def health_redis() -> dict:
+    """
+    Check whether the Redis cache backend is reachable.
+    """
+    from app.utils.llm_cache import build_llm_cache_healthcheck
+
+    return build_llm_cache_healthcheck(strict_redis=True)

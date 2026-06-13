@@ -1,9 +1,8 @@
 """
 Rubric generation engine.
 
-Given a question and its maximum marks, uses the local Ollama model
-(mistral:7b) to produce a list of marking criteria (rubrics) that an
-evaluator should check when scoring a student's answer.
+Generates marking criteria with OpenAI structured outputs and caches the
+validated result.
 """
 
 from __future__ import annotations
@@ -11,19 +10,14 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field, field_validator
 
-from ai_ml.exceptions import RubricsGenerationError
-from ai_ml.model_creator import OllamaModelLoader
-from app.utils.json_utils import extract_json
+from ai_ml.exceptions import LLMServiceError, RubricsGenerationError
+from ai_ml.openai_llm import OpenAIStructuredCaller
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-# Output schema
 
 class RubricsResult(BaseModel):
     """Validated rubric list for a single question."""
@@ -33,104 +27,62 @@ class RubricsResult(BaseModel):
 
     @field_validator("rubrics", mode="before")
     @classmethod
-    def _ensure_list(cls, v) -> List[str]:
-        if isinstance(v, str):
-            return [v]
-        cleaned = [str(item).strip() for item in v if str(item).strip()]
+    def _ensure_list(cls, value) -> List[str]:
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise ValueError("rubrics must be a list")
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
         if not cleaned:
             raise ValueError("Rubrics must contain at least one non-empty item.")
         return cleaned
 
 
-# Prompt
+_SYSTEM_PROMPT = (
+    "You are an academic exam evaluator. "
+    "Generate concise marking criteria and return only structured data."
+)
 
-_RUBRICS_TEMPLATE = """\
-[INST]
-You are an academic exam evaluator. Respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after.
-
-Rules:
-- Generate one rubric criterion per 2-3 marks (e.g. 10 marks = 4-5 rubrics).
-- Each criterion must be a single, specific, evaluative sentence.
-- Do NOT include generic rubrics like "Good effort" or "Clear writing".
-
-Question:
-{question_text}
-
-Total Marks: {max_marks}
-
-Respond with ONLY this JSON:
-{{"question_text":"{question_text}","rubrics":["criterion 1","criterion 2","criterion 3"]}}
-[/INST]"""
-
+_PROMPT_VERSION = "openai-rubrics-v1"
 
 
 class RubricsEngine:
-    """
-    Generates marking rubrics for a given question using a local Ollama model.
+    """Generates marking rubrics for a given question using OpenAI."""
 
-    Args:
-        model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
-    """
-
-    def __init__(self, model=None) -> None:
-        self._model = model
-
-    def _get_model(self):
-        if self._model is None:
-            self._model = OllamaModelLoader.get_model()
-        return self._model
-
-    def _build_chain(self):
-        prompt = PromptTemplate(
-            template=_RUBRICS_TEMPLATE,
-            input_variables=["question_text", "max_marks"],
-        )
-        model = ChatOllama(
-            base_url=settings.OLLAMA_BASE_URL,
-            model=settings.OLLAMA_MODEL_NAME,
-            temperature=settings.OLLAMA_TEMPERATURE,
-            num_ctx=settings.OLLAMA_NUM_CTX,
-            options={
-                "num_predict": settings.OLLAMA_MAX_TOKENS_MCQ
-            }
-        )
-        return prompt | model
+    def __init__(self, client=None) -> None:
+        self._caller = OpenAIStructuredCaller(client=client)
 
     def generate(self, *, question_text: str, max_marks: int) -> RubricsResult:
-        """
-        Generate rubrics for a question.
-
-        Args:
-            question_text: The exam question.
-            max_marks:     The maximum marks allocated to this question.
-
-        Returns:
-            :class:`RubricsResult` with validated rubric list.
-
-        Raises:
-            RubricsGenerationError: If the Ollama call or response parsing fails.
-        """
-        try:
-            chain = self._build_chain()
-            raw = chain.invoke({"question_text": question_text, "max_marks": max_marks})
-        except Exception as exc:
-            logger.error("Ollama call failed during rubric generation: %s", exc)
-            raise RubricsGenerationError(f"LLM call failed: {exc}") from exc
-
-        content = raw.content if hasattr(raw, "content") else str(raw)
-        logger.debug("Rubrics raw output (%d chars)", len(content))
+        user_prompt = (
+            f"Question:\n{question_text}\n\n"
+            f"Total marks: {max_marks}\n\n"
+            "Task: Generate one specific evaluative criterion for roughly every 2 to 3 marks.\n"
+            "Constraints:\n"
+            "- Each criterion must be a single sentence.\n"
+            "- Do not include generic feedback like 'good effort' or 'clear writing'.\n"
+            "- Keep the rubric criteria specific and markable.\n"
+            "- Echo the question text exactly."
+        )
 
         try:
-            data = extract_json(content)
-            # Ensure question_text is echoed correctly (model may paraphrase it)
-            if "question_text" not in data or not data["question_text"]:
-                data["question_text"] = question_text
-            return RubricsResult(**data)
-        except Exception as exc:
-            logger.error(
-                "Failed to parse rubrics response. Raw output (first 500 chars): %s",
-                content[:500],
+            result = self._caller.parse(
+                cache_namespace="rubrics",
+                model=settings.OPENAI_MODEL_RUBRIC,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=RubricsResult,
+                max_output_tokens=settings.OPENAI_MAX_OUTPUT_TOKENS_RUBRIC,
+                cache_inputs={
+                    "question_text": question_text,
+                    "max_marks": max_marks,
+                    "prompt_version": _PROMPT_VERSION,
+                },
             )
-            raise RubricsGenerationError(
-                f"Could not parse rubrics response: {exc}"
-            ) from exc
+            if not result.question_text.strip():
+                result = result.model_copy(update={"question_text": question_text})
+            return result
+        except LLMServiceError:
+            raise
+        except Exception as exc:
+            logger.error("OpenAI call failed during rubric generation: %s", exc)
+            raise RubricsGenerationError(f"LLM call failed: {exc}") from exc
