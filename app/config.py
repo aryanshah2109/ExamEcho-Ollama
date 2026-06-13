@@ -13,12 +13,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Ollama (local LLM)
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL_NAME: str = "mistral:7b"
-    OLLAMA_TEMPERATURE: float = 0.0
-    OLLAMA_MAX_TOKENS: int = 2048
-    OLLAMA_NUM_GPU: int = -1
+    # Groq (cloud LLM)
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL_NAME: str = "llama-3.3-70b-versatile"
+    GROQ_TEMPERATURE: float = 0.0
+    GROQ_MAX_TOKENS: int = 2048
 
     # Whisper
     WHISPER_MODEL_SIZE: str = "base"          # tiny | base | small | medium | large
@@ -37,11 +36,11 @@ class Settings(BaseSettings):
     # API
     API_V1_PREFIX: str = "/api/v1"
     APP_TITLE: str = "ExamEcho AI Service"
-    APP_VERSION: str = "2.0.0"
+    APP_VERSION: str = "3.0.0"
     APP_DESCRIPTION: str = (
         "AI microservice powering ExamEcho: STT, TTS, "
         "question generation, rubric creation, and answer evaluation. "
-        "Uses Ollama (mistral:7b) for all LLM tasks — no external API key required."
+        "Uses Groq (llama-3.3-70b-versatile) for all LLM tasks — fast cloud inference."
     )
 
     class Config:

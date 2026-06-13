@@ -1,27 +1,22 @@
 """
-Singleton model loaders for Whisper and Ollama (mistral:7b).
+Singleton model loaders for Whisper and Groq (llama-3.3-70b-versatile).
 
 All heavy models are loaded **once** at application startup (via the
 FastAPI lifespan) and reused for every request.  Each class also supports
 lazy loading as a fallback so unit tests and scripts can import without
 starting the full server.
 
-Ollama must be running locally and the target model must be pulled:
-
-    ollama pull mistral:7b
-
-The Ollama base URL and model name are read from ``app.config.settings``.
+Groq API key and model name are read from ``app.config.settings``.
 """
 
 from __future__ import annotations
 
 import logging
 
-import httpx
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 
 from app.config import settings
-from ai_ml.exceptions import ModelLoadError, OllamaConnectionError
+from ai_ml.exceptions import ModelLoadError, GroqConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -40,90 +35,6 @@ def _default_device() -> str:
     if _TORCH_AVAILABLE and _torch.cuda.is_available():
         return "cuda"
     return "cpu"
-
-
-# Ollama health / model probe
-
-def check_ollama_server(base_url: str | None = None) -> bool:
-    """
-    Verify that the Ollama server is reachable.
-
-    Args:
-        base_url: Override for the Ollama base URL. Defaults to
-                  ``settings.OLLAMA_BASE_URL``.
-
-    Returns:
-        ``True`` if the server responded with HTTP 200.
-
-    Raises:
-        OllamaConnectionError: If the server is unreachable or returns an
-                               unexpected response.
-    """
-    url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
-    try:
-        response = httpx.get(f"{url}/api/tags", timeout=5.0)
-        response.raise_for_status()
-        return True
-    except httpx.ConnectError as exc:
-        raise OllamaConnectionError(
-            f"Cannot connect to Ollama at '{url}'. "
-            "Make sure Ollama is running:  ollama serve"
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        raise OllamaConnectionError(
-            f"Ollama server at '{url}' returned HTTP {exc.response.status_code}."
-        ) from exc
-    except Exception as exc:
-        raise OllamaConnectionError(
-            f"Unexpected error while probing Ollama server at '{url}': {exc}"
-        ) from exc
-
-
-def check_ollama_model(model_name: str | None = None, base_url: str | None = None) -> bool:
-    """
-    Verify that the required Ollama model is available locally.
-
-    Args:
-        model_name: Override for the model name. Defaults to
-                    ``settings.OLLAMA_MODEL_NAME``.
-        base_url:   Override for the Ollama base URL. Defaults to
-                    ``settings.OLLAMA_BASE_URL``.
-
-    Returns:
-        ``True`` if the model is in the local Ollama model list.
-
-    Raises:
-        OllamaConnectionError: If the server cannot be reached.
-        ModelLoadError: If the specified model is not available locally.
-    """
-    url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
-    name = model_name or settings.OLLAMA_MODEL_NAME
-
-    try:
-        response = httpx.get(f"{url}/api/tags", timeout=5.0)
-        response.raise_for_status()
-        data = response.json()
-    except OllamaConnectionError:
-        raise
-    except Exception as exc:
-        raise OllamaConnectionError(
-            f"Could not retrieve model list from Ollama at '{url}': {exc}"
-        ) from exc
-
-    available = [m.get("name", "") for m in data.get("models", [])]
-    # Normalize: "mistral:7b" matches "mistral:7b", "mistral:latest", etc.
-    name_base = name.split(":")[0].lower()
-    for m in available:
-        if m.lower().startswith(name_base):
-            logger.debug("Ollama model '%s' found in local model list.", m)
-            return True
-
-    pull_cmd = f"ollama pull {name}"
-    raise ModelLoadError(
-        f"Ollama model '{name}' is not available locally.\n"
-        f"  Available models: {available or ['(none)']}\n"
-        f"  Pull the model first:  {pull_cmd}"
-    )
 
 
 # Whisper
@@ -162,67 +73,63 @@ class WhisperModelLoader:
         return cls._instance
 
 
-# Ollama
+# Groq
 
-class OllamaModelLoader:
+class GroqModelLoader:
     """
-    Lazy singleton loader for Ollama (mistral:7b) via LangChain.
+    Lazy singleton loader for Groq via LangChain.
 
-    The :class:`~langchain_ollama.ChatOllama` wrapper is created only on
-    the first call to :meth:`get_model` after verifying that:
-
-    1. The Ollama server is reachable.
-    2. The target model is available locally (otherwise a helpful error
-       with the ``ollama pull`` command is raised).
+    The :class:`~langchain_groq.ChatGroq` wrapper is created only on
+    the first call to :meth:`get_model`.
 
     Configuration is read from ``app.config.settings``:
 
-    - ``OLLAMA_BASE_URL``   — default ``http://localhost:11434``
-    - ``OLLAMA_MODEL_NAME`` — default ``mistral:7b``
-    - ``OLLAMA_TEMPERATURE``
-    - ``OLLAMA_MAX_TOKENS``
+    - ``GROQ_API_KEY``     — required
+    - ``GROQ_MODEL_NAME``  — default ``llama-3.3-70b-versatile``
+    - ``GROQ_TEMPERATURE``
+    - ``GROQ_MAX_TOKENS``
     """
 
-    _instance: ChatOllama | None = None
+    _instance: ChatGroq | None = None
 
     @classmethod
-    def get_model(cls) -> ChatOllama:
+    def get_model(cls) -> ChatGroq:
         """
-        Return the cached Ollama model wrapper, creating it if necessary.
+        Return the cached Groq model wrapper, creating it if necessary.
 
         Returns:
-            ChatOllama: LangChain-wrapped Ollama model.
+            ChatGroq: LangChain-wrapped Groq model.
 
         Raises:
-            OllamaConnectionError: If the Ollama server is unreachable.
-            ModelLoadError:        If the model is not pulled locally.
+            GroqConnectionError: If the Groq API key is missing or invalid.
+            ModelLoadError:      If the model cannot be initialised.
         """
         if cls._instance is None:
+            if not settings.GROQ_API_KEY:
+                raise GroqConnectionError(
+                    "GROQ_API_KEY is not set. "
+                    "Add it to your .env file: GROQ_API_KEY=gsk_..."
+                )
+
             logger.info(
-                "Connecting to Ollama at '%s' with model '%s' …",
-                settings.OLLAMA_BASE_URL,
-                settings.OLLAMA_MODEL_NAME,
+                "Connecting to Groq with model '%s' …",
+                settings.GROQ_MODEL_NAME,
             )
 
-            # Pre-flight checks — fast-fail with actionable messages
-            check_ollama_server(settings.OLLAMA_BASE_URL)
-            check_ollama_model(settings.OLLAMA_MODEL_NAME, settings.OLLAMA_BASE_URL)
-
             try:
-                cls._instance = ChatOllama(
-                    base_url=settings.OLLAMA_BASE_URL,
-                    model=settings.OLLAMA_MODEL_NAME,
-                    temperature=settings.OLLAMA_TEMPERATURE,
-                    num_predict=settings.OLLAMA_MAX_TOKENS,
-                    num_gpu=settings.OLLAMA_NUM_GPU,
+                cls._instance = ChatGroq(
+                    api_key=settings.GROQ_API_KEY,
+                    model=settings.GROQ_MODEL_NAME,
+                    temperature=settings.GROQ_TEMPERATURE,
+                    max_tokens=settings.GROQ_MAX_TOKENS,
                 )
                 logger.info(
-                    "Ollama model '%s' initialised successfully.",
-                    settings.OLLAMA_MODEL_NAME,
+                    "Groq model '%s' initialised successfully.",
+                    settings.GROQ_MODEL_NAME,
                 )
             except Exception as exc:
                 raise ModelLoadError(
-                    f"Failed to initialise Ollama model '{settings.OLLAMA_MODEL_NAME}': {exc}"
+                    f"Failed to initialise Groq model '{settings.GROQ_MODEL_NAME}': {exc}"
                 ) from exc
         return cls._instance
 
@@ -231,7 +138,7 @@ class OllamaModelLoader:
         """
         Clear the cached instance.
 
-        Useful in tests or when the Ollama server is restarted and you need
-        to force re-initialisation on the next :meth:`get_model` call.
+        Useful in tests or when you need to force re-initialisation
+        on the next :meth:`get_model` call.
         """
         cls._instance = None

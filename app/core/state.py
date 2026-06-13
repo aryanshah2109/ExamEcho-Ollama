@@ -10,7 +10,7 @@ Usage::
     from app.core.state import app_state
 
     whisper = app_state.whisper_model   # may be None before startup completes
-    ollama  = app_state.ollama_model    # may be None before startup completes
+    groq    = app_state.groq_model      # may be None before startup completes
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ class AppState:
     whisper_model: Optional[Any] = field(default=None)
     """OpenAI Whisper model instance."""
 
-    ollama_model: Optional[Any] = field(default=None)
-    """LangChain-wrapped Ollama (mistral:7b) model instance."""
+    groq_model: Optional[Any] = field(default=None)
+    """LangChain-wrapped Groq model instance."""
 
     st_model: Optional[Any] = field(default=None)
     """SentenceTransformer model instance (for MCQ evaluation)."""
@@ -37,14 +37,14 @@ class AppState:
         """Return ``True`` when all three core models are loaded."""
         return all([
             self.whisper_model is not None,
-            self.ollama_model is not None,
+            self.groq_model is not None,
             self.st_model is not None,
         ])
 
     @property
     def llm_ready(self) -> bool:
-        """Return ``True`` when the Ollama model is loaded."""
-        return self.ollama_model is not None
+        """Return ``True`` when the Groq model is loaded."""
+        return self.groq_model is not None
 
     @property
     def stt_ready(self) -> bool:

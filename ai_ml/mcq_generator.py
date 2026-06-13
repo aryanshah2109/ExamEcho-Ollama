@@ -2,7 +2,7 @@
 MCQ generation engine for ExamEcho.
 
 Generates Multiple Choice Questions for a given topic and difficulty
-using a local Ollama model (mistral:7b).
+using Groq (llama-3.3-70b-versatile).
 """
 
 from __future__ import annotations
@@ -15,14 +15,12 @@ from typing import List, Dict, Any
 from langchain_core.prompts import PromptTemplate
 
 from ai_ml.exceptions import ChainCreationError, QuestionsGenerationError
-from ai_ml.model_creator import OllamaModelLoader
+from ai_ml.model_creator import GroqModelLoader
 
 logger = logging.getLogger(__name__)
 
 
-# Mistral-optimised prompt for MCQs
 _MCQ_TEMPLATE = """\
-[INST]
 You are an academic exam question setter. You MUST respond with ONLY a valid JSON object.
 No explanation, no markdown, no preamble.
 
@@ -59,16 +57,15 @@ Required JSON format (copy this structure exactly):
 }}
 
 TOPIC: {topic}
-DIFFICULTY: {difficulty}
-[/INST]"""
+DIFFICULTY: {difficulty}"""
 
 
 class MCQGenerator:
     """
-    Generates MCQ exam questions using a local Ollama model.
+    Generates MCQ exam questions using Groq.
 
     Args:
-        model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
+        model: Pre-loaded ChatGroq instance (optional; lazy-loaded if omitted).
     """
 
     def __init__(self, model=None) -> None:
@@ -76,7 +73,7 @@ class MCQGenerator:
 
     def _get_model(self):
         if self._model is None:
-            self._model = OllamaModelLoader.get_model()
+            self._model = GroqModelLoader.get_model()
         return self._model
 
     def _build_chain(self):
@@ -93,11 +90,7 @@ class MCQGenerator:
 
     @staticmethod
     def _sanitize_json(text: str) -> str:
-        """
-        Strip markdown fences, [INST]/[/INST] tags, and extract the first
-        valid JSON object from raw model output.
-        """
-        text = re.sub(r"\[/?INST\]", "", text)
+        """Strip markdown fences and extract the first valid JSON object."""
         text = re.sub(r"```(?:json)?", "", text)
         text = text.replace("```", "").strip()
 
@@ -118,17 +111,16 @@ class MCQGenerator:
         for mcq in raw_mcqs:
             if not isinstance(mcq, dict):
                 continue
-            
+
             question = mcq.get("question", "").strip()
             options = mcq.get("options", [])
             correct_option = mcq.get("correct_option", "").strip()
 
             if not question or not isinstance(options, list) or len(options) != 4 or not correct_option:
                 continue
-                
+
             # Basic validation to ensure correct option is in the options list
             if correct_option not in options:
-                # Attempt to find it if it was stripped
                 found = False
                 for opt in options:
                     if correct_option in opt or opt in correct_option:
@@ -180,7 +172,7 @@ class MCQGenerator:
         except ChainCreationError:
             raise
         except Exception as exc:
-            raise QuestionsGenerationError(f"Ollama call failed: {exc}") from exc
+            raise QuestionsGenerationError(f"Groq call failed: {exc}") from exc
 
         content = raw.content if hasattr(raw, "content") else str(raw)
 

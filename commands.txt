@@ -1,0 +1,11 @@
+Build image
+docker build -t examecho-ai:groq .
+
+Run container
+docker compose up -d
+
+Take down container
+docker compose down
+
+See logs
+docker logs -f examecho-ai

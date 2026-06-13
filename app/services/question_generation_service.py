@@ -23,7 +23,7 @@ _generator: QuestionGenerator | None = None
 def _get_generator() -> QuestionGenerator:
     global _generator
     if _generator is None:
-        _generator = QuestionGenerator(model=app_state.ollama_model)
+        _generator = QuestionGenerator(model=app_state.groq_model)
     return _generator
 
 

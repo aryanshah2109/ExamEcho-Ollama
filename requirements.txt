@@ -10,10 +10,11 @@ pydantic>=2.7.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
 
-# LLM / LangChain (Ollama local backend)
+# LLM / LangChain (Groq cloud backend)
 langchain>=0.2.0
-langchain-ollama>=0.1.0       # ChatOllama — connects to a local Ollama server
-httpx>=0.27.0                 # Used for Ollama health-check and connectivity probes
+langchain-groq>=0.3.0         # ChatGroq — connects to the Groq API
+groq>=0.10.0                  # Official Groq Python client
+httpx>=0.27.0                 # Used for lightweight HTTP-based health checks
 
 # STT
 openai-whisper>=20240930

@@ -1,13 +1,12 @@
 """
-ExamEcho AI Service — FastAPI application entrypoint (Ollama edition).
+ExamEcho AI Service — FastAPI application entrypoint (Groq edition).
 
 Start the server:
     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 Prerequisites:
-    1. Ollama must be running:   ollama serve
-    2. Model must be pulled:     ollama pull mistral:7b
-    3. ffmpeg must be on PATH for audio conversion (STT)
+    1. GROQ_API_KEY must be set in .env
+    2. ffmpeg must be on PATH for audio conversion (STT)
 
 API docs available at:
     http://localhost:8000/docs      (Swagger UI)
@@ -49,16 +48,15 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan handler.
 
-    Loads Whisper, Ollama (mistral:7b), and SentenceTransformer into
+    Loads Whisper, the Groq LLM wrapper, and SentenceTransformer into
     ``app_state`` on startup so every request reuses already-loaded models.
 
     Startup failures are logged but do not abort the server — individual
     endpoints will return 503 if their required model is not ready.
     """
     logger.info("=" * 60)
-    logger.info("Starting ExamEcho AI Service (Ollama edition) …")
-    logger.info("  Ollama URL:   %s", settings.OLLAMA_BASE_URL)
-    logger.info("  Ollama model: %s", settings.OLLAMA_MODEL_NAME)
+    logger.info("Starting ExamEcho AI Service (Groq edition) …")
+    logger.info("  Groq model: %s", settings.GROQ_MODEL_NAME)
     logger.info("  Whisper size: %s", settings.WHISPER_MODEL_SIZE)
     logger.info("=" * 60)
 
@@ -71,22 +69,16 @@ async def lifespan(app: FastAPI):
         logger.error("✗ Whisper model failed to load: %s", exc)
         logger.warning("  STT endpoints will not be functional.")
 
-    # Ollama LLM
+    # Groq LLM
     try:
-        from ai_ml.model_creator import OllamaModelLoader
-        app_state.ollama_model = OllamaModelLoader.get_model()
-        logger.info(
-            "✓ Ollama model '%s' ready at %s",
-            settings.OLLAMA_MODEL_NAME,
-            settings.OLLAMA_BASE_URL,
-        )
+        from ai_ml.model_creator import GroqModelLoader
+        app_state.groq_model = GroqModelLoader.get_model()
+        logger.info("✓ Groq model '%s' ready", settings.GROQ_MODEL_NAME)
     except Exception as exc:
-        logger.error("✗ Ollama model failed to load: %s", exc)
+        logger.error("✗ Groq model failed to load: %s", exc)
         logger.warning(
             "  Question generation, rubric generation, and answer evaluation will not be functional.\n"
-            "  Check that Ollama is running ('ollama serve') and the model is pulled "
-            "('ollama pull %s').",
-            settings.OLLAMA_MODEL_NAME,
+            "  Check that GROQ_API_KEY is configured and the model name is valid."
         )
 
     # SentenceTransformer (MCQ evaluation)
@@ -189,9 +181,9 @@ def health_check() -> dict:
         "status": "ok" if app_state.is_ready else "degraded",
         "version": settings.APP_VERSION,
         "backend": {
-            "llm": "ollama",
-            "model": settings.OLLAMA_MODEL_NAME,
-            "ollama_url": settings.OLLAMA_BASE_URL,
+            "llm": "groq",
+            "model": settings.GROQ_MODEL_NAME,
+            "ollama_url": "https://api.groq.com/openai/v1",
         },
         "models": {
             "whisper": app_state.stt_ready,
@@ -204,41 +196,35 @@ def health_check() -> dict:
 @app.get(
     "/health/ollama",
     tags=["Health"],
-    summary="Ollama server connectivity check",
+    summary="Groq connectivity check",
     description=(
-        "Probes the Ollama server directly and returns its status and "
-        "whether the configured model is available locally."
+        "Probes the configured Groq model wrapper and returns its readiness status."
     ),
 )
 def health_ollama() -> dict:
     """
-    Live probe of the Ollama server.
+    Live probe of the Groq configuration.
 
     Unlike the main ``/health`` endpoint (which reflects startup state),
-    this endpoint queries Ollama on every call.  Useful for debugging
-    connectivity issues without restarting the service.
+    this endpoint validates the Groq configuration on every call.
     """
-    from ai_ml.model_creator import check_ollama_server, check_ollama_model
-    from ai_ml.exceptions import OllamaConnectionError, ModelLoadError
+    from ai_ml.exceptions import GroqConnectionError, ModelLoadError
+    from ai_ml.model_creator import GroqModelLoader
 
     result: dict = {
-        "ollama_url": settings.OLLAMA_BASE_URL,
-        "model": settings.OLLAMA_MODEL_NAME,
+        "ollama_url": "https://api.groq.com/openai/v1",
+        "model": settings.GROQ_MODEL_NAME,
         "server_reachable": False,
         "model_available": False,
         "error": None,
     }
 
     try:
-        check_ollama_server(settings.OLLAMA_BASE_URL)
+        GroqModelLoader.get_model()
         result["server_reachable"] = True
-    except OllamaConnectionError as exc:
-        result["error"] = str(exc)
-        return result
-
-    try:
-        check_ollama_model(settings.OLLAMA_MODEL_NAME, settings.OLLAMA_BASE_URL)
         result["model_available"] = True
+    except GroqConnectionError as exc:
+        result["error"] = str(exc)
     except ModelLoadError as exc:
         result["error"] = str(exc)
 
