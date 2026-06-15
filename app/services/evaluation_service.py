@@ -48,7 +48,7 @@ def evaluate_answer(payload: EvaluateAnswer) -> EvaluateAnswerResponse:
     result = engine.evaluate(
         question_text=payload.question_text,
         student_answer=payload.student_answer,
-        rubric=payload.rubric,
+        rubrics=payload.rubrics,
         max_marks=payload.max_marks,
     )
 

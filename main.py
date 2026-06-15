@@ -54,11 +54,9 @@ async def lifespan(app: FastAPI):
     Startup failures are logged but do not abort the server — individual
     endpoints will return 503 if their required model is not ready.
     """
-    logger.info("=" * 60)
     logger.info("Starting ExamEcho AI Service (Groq edition) …")
     logger.info("  Groq model: %s", settings.GROQ_MODEL_NAME)
     logger.info("  Whisper size: %s", settings.WHISPER_MODEL_SIZE)
-    logger.info("=" * 60)
 
     # Whisper STT
     try:
@@ -183,25 +181,25 @@ def health_check() -> dict:
         "backend": {
             "llm": "groq",
             "model": settings.GROQ_MODEL_NAME,
-            "ollama_url": "https://api.groq.com/openai/v1",
+            "api_url": "https://api.groq.com/openai/v1",
         },
         "models": {
             "whisper": app_state.stt_ready,
-            "ollama": app_state.llm_ready,
+            "groq": app_state.llm_ready,
             "sentence_transformer": app_state.mcq_ready,
         },
     }
 
 
 @app.get(
-    "/health/ollama",
+    "/health/groq",
     tags=["Health"],
     summary="Groq connectivity check",
     description=(
         "Probes the configured Groq model wrapper and returns its readiness status."
     ),
 )
-def health_ollama() -> dict:
+def health_groq() -> dict:
     """
     Live probe of the Groq configuration.
 
@@ -212,7 +210,7 @@ def health_ollama() -> dict:
     from ai_ml.model_creator import GroqModelLoader
 
     result: dict = {
-        "ollama_url": "https://api.groq.com/openai/v1",
+        "api_url": "https://api.groq.com/openai/v1",
         "model": settings.GROQ_MODEL_NAME,
         "server_reachable": False,
         "model_available": False,

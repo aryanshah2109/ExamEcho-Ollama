@@ -64,7 +64,7 @@ Evaluation Rules:
 - justification and suggested_improvement must be plain strings.
 
 Rubric:
-{rubric}
+{rubrics}
 
 Question:
 {question_text}
@@ -104,7 +104,7 @@ class EvaluationEngine:
     def _build_chain(self):
         prompt = PromptTemplate(
             template=_EVAL_TEMPLATE,
-            input_variables=["rubric", "question_text", "student_answer", "max_marks"],
+            input_variables=["rubrics", "question_text", "student_answer", "max_marks"],
         )
         return prompt | self._get_model()
 
@@ -113,7 +113,7 @@ class EvaluationEngine:
         *,
         question_text: str,
         student_answer: str,
-        rubric: List[str],
+        rubrics: List[str],
         max_marks: float,
     ) -> EvalResult:
         """
@@ -122,7 +122,7 @@ class EvaluationEngine:
         Args:
             question_text:  The exam question being answered.
             student_answer: The student's verbatim answer.
-            rubric:         List of marking criteria.
+            rubrics:         List of marking criteria.
             max_marks:      Maximum marks available for this question.
 
         Returns:
@@ -131,12 +131,12 @@ class EvaluationEngine:
         Raises:
             EvaluationError: If the Groq call or JSON parsing fails.
         """
-        rubric_text = "\n".join(f"- {r}" for r in rubric)
+        rubrics_text = "\n".join(f"- {r}" for r in rubrics)
 
         try:
             chain = self._build_chain()
             raw = chain.invoke({
-                "rubric": rubric_text,
+                "rubrics": rubrics_text,
                 "question_text": question_text,
                 "student_answer": student_answer,
                 "max_marks": int(max_marks),

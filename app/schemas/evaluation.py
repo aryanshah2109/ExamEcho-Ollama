@@ -24,20 +24,20 @@ class EvaluateAnswer(BaseModel):
     question_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     question_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=5, max_length=3000)]
     student_answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
-    rubric: List[str] = Field(..., min_length=1, description="One or more marking criteria.")
+    rubrics: List[str] = Field(..., min_length=1, description="One or more marking criteria.")
     max_marks: Annotated[float, Field(ge=1, le=100, description="Maximum marks for this question.")] = 10
 
-    @field_validator("rubric", mode="before")
+    @field_validator("rubrics", mode="before")
     @classmethod
-    def _validate_rubric(cls, v) -> List[str]:
+    def _validate_rubrics(cls, v) -> List[str]:
         if isinstance(v, str):
             v = [v]
         if isinstance(v, list):
             cleaned = [str(item).strip() for item in v if str(item).strip()]
             if not cleaned:
-                raise ValueError("Rubric must contain at least one non-empty item.")
+                raise ValueError("Rubrics must contain at least one non-empty item.")
             return cleaned
-        raise TypeError("Rubric must be a string or list of strings.")
+        raise TypeError("Rubrics must be a string or list of strings.")
 
 
 class EvaluateAnswerResponse(BaseModel):
