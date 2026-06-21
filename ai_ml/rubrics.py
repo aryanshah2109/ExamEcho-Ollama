@@ -1,9 +1,9 @@
 """
 Rubric generation engine.
 
-Given a question and its maximum marks, uses the local Ollama model
-(mistral:7b) to produce a list of marking criteria (rubrics) that an
-evaluator should check when scoring a student's answer.
+Given a question and its maximum marks, uses Groq (llama-3.3-70b-versatile)
+to produce a list of marking criteria (rubrics) that an evaluator should
+check when scoring a student's answer.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field, field_validator
 
 from ai_ml.exceptions import RubricsGenerationError
-from ai_ml.model_creator import OllamaModelLoader
+from ai_ml.model_creator import GroqModelLoader
 from app.utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,6 @@ class RubricsResult(BaseModel):
 # Prompt
 
 _RUBRICS_TEMPLATE = """\
-[INST]
 You are an academic exam evaluator. You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
 
 Task:
@@ -64,16 +63,15 @@ Return ONLY this JSON (no markdown, no extra text):
 Question:
 {question_text}
 
-Total Marks: {max_marks}
-[/INST]"""
+Total Marks: {max_marks}"""
 
 
 class RubricsEngine:
     """
-    Generates marking rubrics for a given question using a local Ollama model.
+    Generates marking rubrics for a given question using Groq.
 
     Args:
-        model: Pre-loaded ChatOllama instance (optional; lazy-loaded if omitted).
+        model: Pre-loaded ChatGroq instance (optional; lazy-loaded if omitted).
     """
 
     def __init__(self, model=None) -> None:
@@ -81,7 +79,7 @@ class RubricsEngine:
 
     def _get_model(self):
         if self._model is None:
-            self._model = OllamaModelLoader.get_model()
+            self._model = GroqModelLoader.get_model()
         return self._model
 
     def _build_chain(self):
@@ -103,13 +101,13 @@ class RubricsEngine:
             :class:`RubricsResult` with validated rubric list.
 
         Raises:
-            RubricsGenerationError: If the Ollama call or response parsing fails.
+            RubricsGenerationError: If the Groq call or response parsing fails.
         """
         try:
             chain = self._build_chain()
             raw = chain.invoke({"question_text": question_text, "max_marks": max_marks})
         except Exception as exc:
-            logger.error("Ollama call failed during rubric generation: %s", exc)
+            logger.error("Groq call failed during rubric generation: %s", exc)
             raise RubricsGenerationError(f"LLM call failed: {exc}") from exc
 
         content = raw.content if hasattr(raw, "content") else str(raw)

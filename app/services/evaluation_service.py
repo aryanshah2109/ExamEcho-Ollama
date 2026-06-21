@@ -12,14 +12,14 @@ from app.schemas.evaluation import EvaluateAnswer, EvaluateAnswerResponse
 
 logger = logging.getLogger(__name__)
 
-# Module-level engine instance (uses the preloaded Ollama model from startup)
+# Module-level engine instance (uses the preloaded Groq model from startup)
 _engine: EvaluationEngine | None = None
 
 
 def _get_engine() -> EvaluationEngine:
     global _engine
     if _engine is None:
-        _engine = EvaluationEngine(model=app_state.ollama_model)
+        _engine = EvaluationEngine(model=app_state.groq_model)
     return _engine
 
 
@@ -48,7 +48,7 @@ def evaluate_answer(payload: EvaluateAnswer) -> EvaluateAnswerResponse:
     result = engine.evaluate(
         question_text=payload.question_text,
         student_answer=payload.student_answer,
-        rubric=payload.rubric,
+        rubrics=payload.rubrics,
         max_marks=payload.max_marks,
     )
 

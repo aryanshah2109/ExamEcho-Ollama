@@ -1,18 +1,4 @@
-"""
-ExamEcho AI Service — FastAPI application entrypoint (Ollama edition).
-
-Start the server:
-    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-Prerequisites:
-    1. Ollama must be running:   ollama serve
-    2. Model must be pulled:     ollama pull mistral:7b
-    3. ffmpeg must be on PATH for audio conversion (STT)
-
-API docs available at:
-    http://localhost:8000/docs      (Swagger UI)
-    http://localhost:8000/redoc     (ReDoc)
-"""
+"""ExamEcho AI Service - FastAPI application entrypoint."""
 
 from __future__ import annotations
 
@@ -26,13 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core.state import app_state
 
-# Reconfigure stdout/stderr to UTF-8 encoding on Windows to prevent UnicodeEncodeError in logging
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
@@ -42,77 +26,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Lifespan: load all heavy models ONCE at startup
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application lifespan handler.
+    """Load the Groq audio client, Groq LLM wrapper, and SentenceTransformer."""
+    logger.info("Starting ExamEcho AI Service (Groq edition) ...")
+    logger.info("  Groq model: %s", settings.GROQ_MODEL_NAME)
+    logger.info("  Groq STT model: %s", settings.GROQ_STT_MODEL_NAME)
+    logger.info("  Groq TTS model: %s", settings.GROQ_TTS_MODEL_NAME)
 
-    Loads Whisper, Ollama (mistral:7b), and SentenceTransformer into
-    ``app_state`` on startup so every request reuses already-loaded models.
-
-    Startup failures are logged but do not abort the server — individual
-    endpoints will return 503 if their required model is not ready.
-    """
-    logger.info("=" * 60)
-    logger.info("Starting ExamEcho AI Service (Ollama edition) …")
-    logger.info("  Ollama URL:   %s", settings.OLLAMA_BASE_URL)
-    logger.info("  Ollama model: %s", settings.OLLAMA_MODEL_NAME)
-    logger.info("  Whisper size: %s", settings.WHISPER_MODEL_SIZE)
-    logger.info("=" * 60)
-
-    # Whisper STT
     try:
-        from ai_ml.model_creator import WhisperModelLoader
-        app_state.whisper_model = WhisperModelLoader.get_model()
-        logger.info("✓ Whisper (%s) model ready", settings.WHISPER_MODEL_SIZE)
-    except Exception as exc:
-        logger.error("✗ Whisper model failed to load: %s", exc)
-        logger.warning("  STT endpoints will not be functional.")
+        from ai_ml.model_creator import GroqAudioClientLoader
 
-    # Ollama LLM
-    try:
-        from ai_ml.model_creator import OllamaModelLoader
-        app_state.ollama_model = OllamaModelLoader.get_model()
-        logger.info(
-            "✓ Ollama model '%s' ready at %s",
-            settings.OLLAMA_MODEL_NAME,
-            settings.OLLAMA_BASE_URL,
-        )
+        app_state.groq_audio_client = GroqAudioClientLoader.get_client()
+        logger.info("Groq audio client ready")
     except Exception as exc:
-        logger.error("✗ Ollama model failed to load: %s", exc)
+        logger.error("Groq audio client failed to load: %s", exc)
+        logger.warning("  STT/TTS endpoints will not be functional.")
+
+    try:
+        from ai_ml.model_creator import GroqModelLoader
+
+        app_state.groq_model = GroqModelLoader.get_model()
+        logger.info("Groq model '%s' ready", settings.GROQ_MODEL_NAME)
+    except Exception as exc:
+        logger.error("Groq model failed to load: %s", exc)
         logger.warning(
             "  Question generation, rubric generation, and answer evaluation will not be functional.\n"
-            "  Check that Ollama is running ('ollama serve') and the model is pulled "
-            "('ollama pull %s').",
-            settings.OLLAMA_MODEL_NAME,
+            "  Check that GROQ_API_KEY is configured and the model name is valid."
         )
 
-    # SentenceTransformer (MCQ evaluation)
     try:
         from sentence_transformers import SentenceTransformer
-        logger.info("Loading SentenceTransformer '%s' …", settings.MCQ_EVAL_MODEL_NAME)
+
+        logger.info("Loading SentenceTransformer '%s' ...", settings.MCQ_EVAL_MODEL_NAME)
         app_state.st_model = SentenceTransformer(settings.MCQ_EVAL_MODEL_NAME)
-        logger.info("✓ SentenceTransformer ready")
+        logger.info("SentenceTransformer ready")
     except Exception as exc:
-        logger.error("✗ SentenceTransformer failed to load: %s", exc)
+        logger.error("SentenceTransformer failed to load: %s", exc)
         logger.warning("  MCQ evaluation endpoints will not be functional.")
 
-    # Summary
     if app_state.is_ready:
-        logger.info("✓ All models loaded — service is fully ready.")
+        logger.info("All models loaded - service is fully ready.")
     else:
         ready = []
         if app_state.stt_ready:
-            ready.append("STT")
+            ready.append("STT (Groq)")
         if app_state.llm_ready:
             ready.append("LLM (question gen / eval / rubrics)")
         if app_state.mcq_ready:
             ready.append("MCQ evaluation")
         logger.warning(
-            "Service started in DEGRADED state. "
-            "Functional: [%s]. Check logs above for errors.",
+            "Service started in DEGRADED state. Functional: [%s]. Check logs above for errors.",
             ", ".join(ready) if ready else "none",
         )
 
@@ -120,8 +84,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down ExamEcho AI Service.")
 
-
-# FastAPI app
 
 app = FastAPI(
     title=settings.APP_TITLE,
@@ -132,8 +94,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -141,8 +101,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Routers
 
 from app.routers import (  # noqa: E402
     evaluation,
@@ -166,8 +124,6 @@ for router in [
     app.include_router(router, prefix=settings.API_V1_PREFIX)
 
 
-# Health check
-
 @app.get(
     "/health",
     tags=["Health"],
@@ -178,67 +134,55 @@ for router in [
     ),
 )
 def health_check() -> dict:
-    """
-    Returns HTTP 200 with model-readiness information.
-
-    ``status`` is ``"ok"`` when all models are loaded, ``"degraded"``
-    otherwise.  Individual model flags let the caller identify which
-    capabilities are unavailable.
-    """
+    """Returns HTTP 200 with model-readiness information."""
     return {
         "status": "ok" if app_state.is_ready else "degraded",
         "version": settings.APP_VERSION,
         "backend": {
-            "llm": "ollama",
-            "model": settings.OLLAMA_MODEL_NAME,
-            "ollama_url": settings.OLLAMA_BASE_URL,
+            "llm": "groq",
+            "model": settings.GROQ_MODEL_NAME,
+            "api_url": settings.GROQ_API_BASE_URL,
+            "stt": "groq",
+            "tts": "groq",
         },
         "models": {
             "whisper": app_state.stt_ready,
-            "ollama": app_state.llm_ready,
+            "stt": app_state.stt_ready,
+            "groq": app_state.llm_ready,
             "sentence_transformer": app_state.mcq_ready,
         },
     }
 
 
 @app.get(
-    "/health/ollama",
+    "/health/groq",
     tags=["Health"],
-    summary="Ollama server connectivity check",
-    description=(
-        "Probes the Ollama server directly and returns its status and "
-        "whether the configured model is available locally."
-    ),
+    summary="Groq connectivity check",
+    description="Probes the configured Groq clients and returns their readiness status.",
 )
-def health_ollama() -> dict:
-    """
-    Live probe of the Ollama server.
-
-    Unlike the main ``/health`` endpoint (which reflects startup state),
-    this endpoint queries Ollama on every call.  Useful for debugging
-    connectivity issues without restarting the service.
-    """
-    from ai_ml.model_creator import check_ollama_server, check_ollama_model
-    from ai_ml.exceptions import OllamaConnectionError, ModelLoadError
+def health_groq() -> dict:
+    """Live probe of the Groq configuration."""
+    from ai_ml.exceptions import GroqConnectionError, ModelLoadError
+    from ai_ml.model_creator import GroqAudioClientLoader, GroqModelLoader
 
     result: dict = {
-        "ollama_url": settings.OLLAMA_BASE_URL,
-        "model": settings.OLLAMA_MODEL_NAME,
+        "api_url": settings.GROQ_API_BASE_URL,
+        "model": settings.GROQ_MODEL_NAME,
+        "audio_model": settings.GROQ_STT_MODEL_NAME,
         "server_reachable": False,
         "model_available": False,
+        "audio_ready": False,
         "error": None,
     }
 
     try:
-        check_ollama_server(settings.OLLAMA_BASE_URL)
+        GroqAudioClientLoader.get_client()
+        GroqModelLoader.get_model()
         result["server_reachable"] = True
-    except OllamaConnectionError as exc:
-        result["error"] = str(exc)
-        return result
-
-    try:
-        check_ollama_model(settings.OLLAMA_MODEL_NAME, settings.OLLAMA_BASE_URL)
         result["model_available"] = True
+        result["audio_ready"] = True
+    except GroqConnectionError as exc:
+        result["error"] = str(exc)
     except ModelLoadError as exc:
         result["error"] = str(exc)
 

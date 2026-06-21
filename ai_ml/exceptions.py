@@ -59,8 +59,8 @@ class RubricsGenerationError(ExamEchoAIError):
 # Model / Server Loading
 
 class ModelLoadError(ExamEchoAIError):
-    """Raised when a model (Whisper, Ollama, SentenceTransformer) fails to load."""
+    """Raised when a model (Whisper, Groq, SentenceTransformer) fails to load."""
 
 
-class OllamaConnectionError(ExamEchoAIError):
-    """Raised when the Ollama server is unreachable or the model is not available."""
+class GroqConnectionError(ExamEchoAIError):
+    """Raised when the Groq API is unreachable or the API key is invalid."""

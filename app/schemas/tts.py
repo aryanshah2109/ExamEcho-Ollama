@@ -12,7 +12,7 @@ class TTSRequest(BaseModel):
     Request body for ``POST /api/v1/tts/synthesize``.
 
     Attributes:
-        question_id: Used to name the generated MP3 file.
+        question_id: Used to name the generated WAV file.
         text:        Text to convert to speech (max 500 chars).
         language:    BCP-47 language code (default ``"en"``).
         slow:        If ``True``, generate slower speech.

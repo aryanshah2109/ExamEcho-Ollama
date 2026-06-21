@@ -1,11 +1,9 @@
 """
 Viva / long-answer evaluation engine.
 
-Sends the student's answer to the local Ollama model (mistral:7b) with a
+Sends the student's answer to Groq (llama-3.3-70b-versatile) with a
 rubric and returns a structured :class:`EvalResult` containing score,
 strengths, weaknesses, justification, and improvement suggestions.
-
-The prompt uses Mistral's [INST] instruction format for reliable JSON output.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, field_validator
 
 from ai_ml.exceptions import EvaluationError
-from ai_ml.model_creator import OllamaModelLoader
+from ai_ml.model_creator import GroqModelLoader
 from app.utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
@@ -56,7 +54,6 @@ class EvalResult(BaseModel):
 # Evaluation engine
 
 _EVAL_TEMPLATE = """\
-[INST]
 You are a strict academic exam evaluator. You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON.
 
 Evaluation Rules:
@@ -67,7 +64,7 @@ Evaluation Rules:
 - justification and suggested_improvement must be plain strings.
 
 Rubric:
-{rubric}
+{rubrics}
 
 Question:
 {question_text}
@@ -84,16 +81,15 @@ Return ONLY this JSON (no markdown, no extra text):
   "weakness": [],
   "justification": "",
   "suggested_improvement": ""
-}}
-[/INST]"""
+}}"""
 
 
 class EvaluationEngine:
     """
-    Evaluates a student's answer using a local Ollama model with a provided rubric.
+    Evaluates a student's answer using Groq with a provided rubric.
 
     Args:
-        model: Pre-loaded ChatOllama instance. If ``None``, the engine uses
+        model: Pre-loaded ChatGroq instance. If ``None``, the engine uses
                the singleton loader on first use.
     """
 
@@ -102,13 +98,13 @@ class EvaluationEngine:
 
     def _get_model(self):
         if self._model is None:
-            self._model = OllamaModelLoader.get_model()
+            self._model = GroqModelLoader.get_model()
         return self._model
 
     def _build_chain(self):
         prompt = PromptTemplate(
             template=_EVAL_TEMPLATE,
-            input_variables=["rubric", "question_text", "student_answer", "max_marks"],
+            input_variables=["rubrics", "question_text", "student_answer", "max_marks"],
         )
         return prompt | self._get_model()
 
@@ -117,7 +113,7 @@ class EvaluationEngine:
         *,
         question_text: str,
         student_answer: str,
-        rubric: List[str],
+        rubrics: List[str],
         max_marks: float,
     ) -> EvalResult:
         """
@@ -126,27 +122,27 @@ class EvaluationEngine:
         Args:
             question_text:  The exam question being answered.
             student_answer: The student's verbatim answer.
-            rubric:         List of marking criteria.
+            rubrics:         List of marking criteria.
             max_marks:      Maximum marks available for this question.
 
         Returns:
             :class:`EvalResult` with score, feedback, and suggestions.
 
         Raises:
-            EvaluationError: If the Ollama call or JSON parsing fails.
+            EvaluationError: If the Groq call or JSON parsing fails.
         """
-        rubric_text = "\n".join(f"- {r}" for r in rubric)
+        rubrics_text = "\n".join(f"- {r}" for r in rubrics)
 
         try:
             chain = self._build_chain()
             raw = chain.invoke({
-                "rubric": rubric_text,
+                "rubrics": rubrics_text,
                 "question_text": question_text,
                 "student_answer": student_answer,
                 "max_marks": int(max_marks),
             })
         except Exception as exc:
-            logger.error("Ollama call failed during evaluation: %s", exc)
+            logger.error("Groq call failed during evaluation: %s", exc)
             raise EvaluationError(f"LLM call failed: {exc}") from exc
 
         content = raw.content if hasattr(raw, "content") else str(raw)

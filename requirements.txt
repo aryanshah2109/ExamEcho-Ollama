@@ -1,4 +1,4 @@
-# ExamEcho AI Service — Python dependencies
+# ExamEcho AI Service - Python dependencies
 # Tested with Python 3.10+
 
 # Web framework
@@ -10,14 +10,14 @@ pydantic>=2.7.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
 
-# LLM / LangChain (Ollama local backend)
+# LLM / LangChain (Groq cloud backend)
 langchain>=0.2.0
-langchain-ollama>=0.1.0       # ChatOllama — connects to a local Ollama server
-httpx>=0.27.0                 # Used for Ollama health-check and connectivity probes
+langchain-groq>=0.3.0
+groq>=0.10.0
+httpx>=0.27.0
 
-# STT
-openai-whisper>=20240930
-# transformers and torch are optional — only needed for the 'hf' STT backend
+# STT / audio
+# transformers and torch are optional and only needed for legacy compatibility aliases
 # transformers>=4.40.0
 # torch>=2.2.0
 
@@ -26,9 +26,6 @@ soundfile>=0.12.1
 webrtcvad>=2.0.10
 numpy>=1.26.0
 # ffmpeg must be installed on the host (see README)
-
-# TTS
-gTTS>=2.5.1
 
 # MCQ evaluation
 sentence-transformers>=3.0.0
