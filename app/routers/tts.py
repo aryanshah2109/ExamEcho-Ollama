@@ -1,6 +1,4 @@
-"""
-TTS (Text-to-Speech) router.
-"""
+"""TTS (Text-to-Speech) router."""
 
 from __future__ import annotations
 
@@ -23,24 +21,19 @@ router = APIRouter(prefix="/tts", tags=["Text-to-Speech"])
     "/synthesize",
     summary="Convert text to speech",
     description=(
-        "Synthesise speech from the provided text and return an MP3 audio file. "
+        "Synthesise speech from the provided text and return a WAV audio file. "
         "The generated file is streamed to the client and automatically deleted "
         "from the server after the response is sent."
     ),
     response_class=FileResponse,
     responses={
-        200: {"content": {"audio/mpeg": {}}, "description": "MP3 audio file."},
+        200: {"content": {"audio/wav": {}}, "description": "WAV audio file."},
         400: {"description": "Empty or invalid text."},
         500: {"description": "TTS synthesis failed."},
     },
 )
 async def synthesize_endpoint(payload: TTSRequest, background_tasks: BackgroundTasks) -> FileResponse:
-    """
-    Convert text to an MP3 audio file.
-
-    The response is the raw MP3 binary.  The temp file is cleaned up
-    via a background task after the response has been fully sent.
-    """
+    """Convert text to a WAV audio file."""
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
@@ -53,16 +46,15 @@ async def synthesize_endpoint(payload: TTSRequest, background_tasks: BackgroundT
         )
     except TTSError as exc:
         logger.error("TTS synthesis error: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {exc}")
-    except Exception:
+        raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {exc}") from exc
+    except Exception as exc:
         logger.exception("Unexpected TTS error")
-        raise HTTPException(status_code=500, detail="Speech synthesis failed due to an internal error.")
+        raise HTTPException(status_code=500, detail="Speech synthesis failed due to an internal error.") from exc
 
-    # Schedule deletion AFTER the file has been streamed to the client
     background_tasks.add_task(delete_audio_file, audio_path)
 
     return FileResponse(
         path=str(audio_path),
-        media_type="audio/mpeg",
-        filename=f"{payload.question_id}.mp3",
+        media_type="audio/wav",
+        filename=f"{payload.question_id}.wav",
     )

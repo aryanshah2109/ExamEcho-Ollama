@@ -1,10 +1,4 @@
-"""
-TTS service: bridges FastAPI route → TTS AI module.
-
-Generates an MP3 audio file for a question string and returns its path.
-The caller (router) is responsible for serving the file; after the
-response is sent, the file should be deleted via a BackgroundTask.
-"""
+"""TTS service: bridges FastAPI route -> Groq-backed TTS module."""
 
 from __future__ import annotations
 
@@ -19,31 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 def generate_speech(*, text: str, question_id: str, language: str = "en", slow: bool = False) -> Path:
-    """
-    Synthesise speech from text and write to a named MP3 file.
-
-    Args:
-        text:        Text to convert to speech.
-        question_id: Used to name the output file (``<question_id>.mp3``).
-        language:    BCP-47 language code (default ``"en"``).
-        slow:        If ``True``, use slower speech rate.
-
-    Returns:
-        :class:`~pathlib.Path` of the generated MP3 file.
-
-    Raises:
-        TTSError: If synthesis fails.
-    """
+    """Synthesise speech from text and write to a named WAV file."""
     audio_dir = Path(settings.TTS_AUDIO_DIR)
     audio_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = audio_dir / f"{question_id}.mp3"
+    output_path = audio_dir / f"{question_id}.wav"
 
     config = TTSConfig(
         language=language,
         slow=slow,
         output_file=output_path,
         return_bytes=False,
+        response_format=settings.GROQ_TTS_RESPONSE_FORMAT,
     )
 
     pipeline = TTSPipeline(
@@ -58,15 +39,7 @@ def generate_speech(*, text: str, question_id: str, language: str = "en", slow: 
 
 
 def delete_audio_file(path: str | Path) -> None:
-    """
-    Remove a generated audio file from disk.
-
-    Intended for use as a FastAPI ``BackgroundTask`` so temp files are
-    cleaned up after the response has been streamed to the client.
-
-    Args:
-        path: Path to the file to delete.
-    """
+    """Remove a generated audio file from disk."""
     try:
         os.unlink(path)
         logger.debug("Deleted TTS audio file: %s", path)

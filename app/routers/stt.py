@@ -1,6 +1,4 @@
-"""
-STT (Speech-to-Text) router.
-"""
+"""STT (Speech-to-Text) router."""
 
 from __future__ import annotations
 
@@ -24,21 +22,15 @@ router = APIRouter(prefix="/stt", tags=["Speech-to-Text"])
     description=(
         "Upload an audio file and receive its transcription as plain text. "
         "Supported formats: WAV, MP3, MP4, WebM, OGG. "
-        "The Whisper backend is used by default."
+        "Groq transcription is used by default. Legacy model aliases are accepted."
     ),
 )
 async def transcribe_endpoint(
     audio: UploadFile = File(..., description="Audio file to transcribe."),
     lang: str = Query(default="en", description="BCP-47 language code (e.g. 'en', 'hi')."),
-    model: str = Query(default="whisper", description="STT backend: 'whisper' or 'hf'."),
+    model: str = Query(default="groq", description="STT backend alias. Groq is used for all supported values."),
 ) -> STTResponse:
-    """
-    Transcribe an uploaded audio file to text.
-
-    - Accepted MIME types: `audio/wav`, `audio/x-wav`, `audio/mpeg`,
-      `audio/mp4`, `audio/webm`, `audio/ogg`.
-    - The uploaded file is saved to a temp path, transcribed, then deleted.
-    """
+    """Transcribe an uploaded audio file to text."""
     if audio.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=415,
@@ -57,6 +49,6 @@ async def transcribe_endpoint(
         raise HTTPException(status_code=422, detail=f"Audio processing failed: {exc}")
     except Exception as exc:
         logger.exception("Unexpected STT error")
-        raise HTTPException(status_code=500, detail="Transcription failed due to an internal error.")
+        raise HTTPException(status_code=500, detail="Transcription failed due to an internal error.") from exc
 
-    return STTResponse(text=text, language=lang, model=model)
+    return STTResponse(text=text, language=lang, model="groq")

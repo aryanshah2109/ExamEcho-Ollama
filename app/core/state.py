@@ -1,17 +1,4 @@
-"""
-Application-level state container.
-
-All models that are loaded once at startup and shared across requests
-live here.  Import ``app_state`` wherever you need access to a preloaded
-model rather than reaching into the module directly.
-
-Usage::
-
-    from app.core.state import app_state
-
-    whisper = app_state.whisper_model   # may be None before startup completes
-    groq    = app_state.groq_model      # may be None before startup completes
-"""
+"""Application-level state container."""
 
 from __future__ import annotations
 
@@ -24,7 +11,10 @@ class AppState:
     """Container for singleton model instances loaded at startup."""
 
     whisper_model: Optional[Any] = field(default=None)
-    """OpenAI Whisper model instance."""
+    """Legacy Whisper model instance. Retained for backward compatibility."""
+
+    groq_audio_client: Optional[Any] = field(default=None)
+    """Groq SDK client used for STT and TTS."""
 
     groq_model: Optional[Any] = field(default=None)
     """LangChain-wrapped Groq model instance."""
@@ -34,9 +24,9 @@ class AppState:
 
     @property
     def is_ready(self) -> bool:
-        """Return ``True`` when all three core models are loaded."""
+        """Return ``True`` when all required runtime clients are loaded."""
         return all([
-            self.whisper_model is not None,
+            self.groq_audio_client is not None,
             self.groq_model is not None,
             self.st_model is not None,
         ])
@@ -48,8 +38,8 @@ class AppState:
 
     @property
     def stt_ready(self) -> bool:
-        """Return ``True`` when the Whisper model is loaded."""
-        return self.whisper_model is not None
+        """Return ``True`` when the Groq audio client is loaded."""
+        return self.groq_audio_client is not None
 
     @property
     def mcq_ready(self) -> bool:
@@ -57,5 +47,4 @@ class AppState:
         return self.st_model is not None
 
 
-# Single global instance — import this everywhere
 app_state = AppState()
